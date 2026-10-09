@@ -598,6 +598,68 @@ function telegram_(method, payload) {
 }
 
 /**
+ * Run once from the editor (Kim's request, 9 Oct 2026): makes every driver name in "Fuel Refill"
+ * match the numbered name in Driver & Truck column C, e.g. "សេង រដ្ឋា" → "15.សេង រដ្ឋា", 36 → "36.ខាត់ ស៊ីហា".
+ * Only the driver column changes. Every change (and any name it can't match) is listed in a new
+ * "Driver name fixes" sheet, which also keeps the old values.
+ */
+function fixDriverNames() {
+  const plain = s => String(s).replace(/^\s*[0-9០-៩]+\s*[.)\-]?\s*/, '').replace(/\s+/g, ' ').trim();
+  const byNo = {}, byName = {}, labels = {};
+  readTable_(SHEETS.DRIVER_TRUCK).forEach(r => {
+    const label = String(r[DT_DRIVER] || '').trim();
+    if (!label) return;
+    labels[label] = true;
+    const m = label.match(/^\s*([0-9០-៩]+)\s*\./);
+    const no = m ? toNumber_(m[1]) : toNumber_(r['ID_DL']);
+    if (no && !byNo[no]) byNo[no] = label;
+    const key = plain(label);
+    (byName[key] = byName[key] || []).push({ label: label, plate: String(r[DT_PLATE] || '').trim() });
+  });
+
+  const lock = LockService.getScriptLock();
+  lock.waitLock(30000);
+  try {
+    const sheet = refillSheet_();
+    const cols = headerIndex_(sheet);
+    const n = sheet.getLastRow() - 1;
+    if (n < 1) return 'No rows.';
+    const all = sheet.getRange(2, 1, n, sheet.getLastColumn()).getValues();
+    const drv = cols[COL.DRIVER], plateCol = cols[COL.PLATE], idCol = cols[COL.ID_FR];
+    const out = all.map(r => [r[drv]]);
+    const log = [];
+    all.forEach((r, i) => {
+      const v = String(r[drv] === null ? '' : r[drv]).trim();
+      if (!v || labels[v]) return;
+      let next = '';
+      if (/^[0-9០-៩]+(\.0+)?$/.test(v)) {
+        next = byNo[toNumber_(v)] || '';
+      } else {
+        const list = byName[plain(v)] || [];
+        const plate = String(r[plateCol] || '').trim();
+        next = (list.find(x => x.plate === plate) || list[0] || {}).label || '';
+      }
+      log.push([i + 2, r[idCol], v, next || '(not found, left as is)']);
+      if (next) out[i][0] = next;
+    });
+    if (log.length) {
+      sheet.getRange(2, drv + 1, n, 1).setValues(out);
+      const ss = SpreadsheetApp.getActive();
+      const logSheet = ss.getSheetByName('Driver name fixes') || ss.insertSheet('Driver name fixes');
+      logSheet.clear();
+      logSheet.getRange(1, 1, 1, 4).setValues([['Row', 'ID_FR', 'Old name', 'New name']]).setFontWeight('bold');
+      logSheet.getRange(2, 1, log.length, 4).setValues(log);
+    }
+    const fixed = log.filter(x => x[3].indexOf('(not found') !== 0).length;
+    const msg = 'Driver names fixed: ' + fixed + '. Not found: ' + (log.length - fixed) + '.';
+    console.log(msg);
+    return msg;
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/**
  * Run once from the editor: finds the group the bot was added to, saves its chat ID in the
  * Settings sheet and posts a test message there. Before running it, add the bot to the group
  * and send /start@<bot name> in the group.
