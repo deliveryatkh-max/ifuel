@@ -56,16 +56,16 @@ main { max-width: 1080px; margin: 0 auto; padding: 18px 16px 32px; }
 
 .tile {
   position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px;
-  min-height: 178px; padding: 20px 10px 16px; border-radius: 18px; text-align: center; text-decoration: none; color: var(--text);
+  min-height: 150px; padding: 20px 10px 16px; border-radius: 18px; text-align: center; text-decoration: none; color: var(--text);
   background: var(--card); border: 1px solid var(--line); box-shadow: var(--shadow); cursor: pointer;
   transition: transform .12s, box-shadow .12s, border-color .12s; -webkit-tap-highlight-color: transparent;
 }
 .tile:hover { border-color: var(--accent); box-shadow: 0 6px 18px rgba(1, 30, 65, .12); }
 .tile:active { transform: scale(.97); }
 .tile .ico {
-  display: flex; align-items: center; justify-content: center; width: 96px; height: 96px; border-radius: 28px; background: var(--soft);
+  display: flex; align-items: center; justify-content: center; width: 77px; height: 77px; border-radius: 22px; background: var(--soft);
 }
-.tile .ico img { width: 66px; height: 66px; display: block; }
+.tile .ico img { width: 53px; height: 53px; display: block; }
 .tile:hover .ico img { transform: scale(1.06); transition: transform .12s; }
 .tile .t { font-size: 18px; font-weight: 700; line-height: 1.25; }
 .tile .t small { font-size: 13px; margin-top: 2px; }

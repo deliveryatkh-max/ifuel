@@ -61,9 +61,9 @@
     $('#view').innerHTML = mine.length ? `
       <p class="hello">សួស្តី <b>${esc(name)}</b> · ជ្រើសរើសកម្មវិធី / Choose an app</p>
       <div class="grid">${mine.map(a => {
-        const inner = `<span class="ico"><img src="icons/${esc(a.key)}.svg" alt="" width="66" height="66"></span>
-          <span class="t">${esc(a.kh)}${a.en !== a.kh ? `<small>${esc(a.en)}</small>` : ''}</span>
-          ${a.url ? '' : '<span class="badge">មកដល់ឆាប់ៗ · Soon</span>'}`;
+        const inner = `<span class="ico"><img src="icons/${esc(a.key)}.svg" alt="" width="53" height="53"></span>
+          <span class="t">${esc(a.kh)}</span>
+          ${a.url ? '' : '<span class="badge">មកដល់ឆាប់ៗ</span>'}`;
         return a.url ? `<a class="tile" href="${esc(a.url)}">${inner}</a>`
           : `<button type="button" class="tile soon" data-soon="${esc(a.kh)}">${inner}</button>`;
       }).join('')}</div>` : `
