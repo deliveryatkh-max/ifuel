@@ -366,12 +366,24 @@ function dashboardData_(p, user) {
   const values = sheet.getDataRange().getValues();
   const header = values.shift().map(h => String(h).trim());
   const idx = DASH_FIELDS.map(f => header.indexOf(f[1]));
+  // "Entered by" goes out as the person's name from the Users sheet, never the email.
+  const userCol = DASH_FIELDS.findIndex(f => f[0] === 'user');
+  const names = {};
+  readTable_(SHEETS.USERS).forEach((u, i) => {
+    const email = String(u['Email'] || '').trim().toLowerCase();
+    if (email) names[email] = String(u['Name'] || '').trim() || 'No name (Users row ' + (i + 2) + ')';
+  });
+  const nameOf = email => {
+    const e = String(email || '').trim().toLowerCase();
+    return !e ? '' : names[e] || 'Not in Users sheet';
+  };
   const rows = [];
   values.forEach(r => {
     if (idx[0] < 0 || r[idx[0]] === '') return;
-    rows.push(idx.map(i => {
+    rows.push(idx.map((i, k) => {
       if (i < 0) return '';
       const v = r[i];
+      if (k === userCol) return nameOf(v);
       if (v instanceof Date) return v.getTime();
       // Drive photo links shortened to "d:<file id>" to keep the download small; the dashboard expands them.
       return typeof v === 'string' ? v.replace(/^https:\/\/drive\.google\.com\/file\/d\/([\w-]+)\/view.*$/, 'd:$1') : v;
@@ -389,7 +401,7 @@ function dashboardData_(p, user) {
       label: String(d[DT_DRIVER] || '').trim(), plate: String(d[DT_PLATE] || '').trim(),
     })).filter(d => d.label || d.name),
     settings: dashSettings_(),
-    user: user,
+    user: { name: user.name, role: user.role },
     generatedAt: Date.now(),
   };
 }
