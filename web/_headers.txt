@@ -1,0 +1,19 @@
+/*
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin
+/config.js
+  Cache-Control: no-cache
+/app.js
+  Cache-Control: no-cache
+/styles.css
+  Cache-Control: no-cache
+/index.html
+  Cache-Control: no-cache
+/
+  Cache-Control: no-cache
+/dashboard/
+  Cache-Control: no-cache
+/dashboard/index.html
+  Cache-Control: no-cache
+/dashboard/assets/*
+  Cache-Control: no-cache
