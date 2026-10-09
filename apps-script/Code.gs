@@ -61,7 +61,11 @@ function doPost(e) {
     const action = ACTIONS[req.action];
     if (req.action === 'requestAccess') return json_({ ok: true, data: requestAccess_(req.token) });
     if (!action) throw new Error('Unknown action: ' + req.action);
+    if (req.action === 'home') ensureAppColumns_();
     const user = authenticate_(req.token);
+    // Each app checks its own tick box in the Users sheet (admins can open everything).
+    const app = ACTION_APP[req.action];
+    if (app && !canUse_(user, app)) throw new Error('NOACCESS: ' + user.email + ' has no access to ' + appTitle_(app) + '. Ask the admin to tick it in the Users sheet.');
     return json_({ ok: true, data: action(req.payload || {}, user) });
   } catch (err) {
     return json_({ ok: false, error: String((err && err.message) || err) });
@@ -78,7 +82,70 @@ const ACTIONS = {
   photo: getPhoto_,
   dashboard: dashboardData_,
   dashboardSave: dashboardSave_,
+  home: homeApps_,
 };
+
+// ---------- Home menu: which apps each user can open ----------
+// One tick box column per app in the Users sheet. Keys match the tiles in web/home.js.
+const HOME_APPS = [
+  { key: 'fuel', col: 'ចាក់សាំង' },
+  { key: 'transport', col: 'ដឹកជញ្ជូន' },
+  { key: 'overtime', col: 'ថែមម៉ោង' },
+  { key: 'location', col: 'ទីតាំងថ្មី' },
+  { key: 'dashboard', col: 'Dashboard' },
+];
+const ACTION_APP = {
+  config: 'fuel', submit: 'fuel', update: 'fuel', mine: 'fuel', all: 'fuel', review: 'fuel',
+  dashboard: 'dashboard', dashboardSave: 'dashboard',
+};
+
+function appTitle_(key) {
+  const a = HOME_APPS.find(x => x.key === key);
+  return a ? a.col : key;
+}
+
+/** True when the user may open the app. A missing column means the menu isn't set up yet: everyone keeps today's access. */
+function canUse_(user, key) {
+  if (user.role === 'admin') return true;
+  if (user.apps[key] === undefined) return key === 'dashboard' ? isReviewer_(user) : true;
+  return user.apps[key];
+}
+
+function homeApps_(p, user) {
+  return {
+    user: { name: user.name, role: user.role },
+    apps: HOME_APPS.map(a => a.key).filter(k => canUse_(user, k)),
+  };
+}
+
+/**
+ * Adds the app tick box columns to the Users sheet the first time the home menu is opened.
+ * Starting values keep today's access: ចាក់សាំង ticked for everyone, Dashboard for reviewers and admins.
+ */
+function ensureAppColumns_() {
+  const sheet = SpreadsheetApp.getActive().getSheetByName(SHEETS.USERS);
+  const header = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map(h => String(h).trim());
+  const missing = HOME_APPS.filter(a => header.indexOf(a.col) < 0);
+  if (!missing.length) return;
+  const lock = LockService.getScriptLock();
+  lock.waitLock(20000);
+  try {
+    const now = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map(h => String(h).trim());
+    const roleCol = now.indexOf('Role');
+    const rows = Math.max(sheet.getLastRow() - 1, 0);
+    const roles = rows && roleCol >= 0 ? sheet.getRange(2, roleCol + 1, rows, 1).getValues().map(r => String(r[0]).trim().toLowerCase()) : [];
+    missing.filter(a => now.indexOf(a.col) < 0).forEach(a => {
+      const c = sheet.getLastColumn() + 1;
+      sheet.getRange(1, c).setValue(a.col).setFontWeight('bold');
+      // Only the rows that exist: blank tick boxes below would count as data and push new rows down the sheet.
+      if (rows) sheet.getRange(2, c, rows, 1).insertCheckboxes().setValues(roles.map(r =>
+        [a.key === 'fuel' || (a.key === 'dashboard' && (r === 'reviewer' || r === 'admin'))]));
+    });
+  } finally {
+    lock.releaseLock();
+  }
+  delete tableCache_[SHEETS.USERS];
+}
 
 // ---------- Auth ----------
 
@@ -98,7 +165,9 @@ function authenticate_(token) {
   const user = readTable_(SHEETS.USERS).find(u =>
     String(u['Email']).trim().toLowerCase() === email && isYes_(u['Active']));
   if (!user) throw new Error('NOACCESS: ' + email + ' is not allowed to use this app. Ask the admin to add you to the Users sheet.');
-  return { email: email, name: user['Name'] || '', role: String(user['Role'] || 'user').toLowerCase() };
+  const apps = {};
+  HOME_APPS.forEach(a => { if (a.col in user) apps[a.key] = isYes_(user[a.col]); });
+  return { email: email, name: user['Name'] || '', role: String(user['Role'] || 'user').toLowerCase(), apps: apps };
 }
 
 /** Checks a Google Sign-In ID token with Google; returns its details with a lower-case email. */
@@ -137,6 +206,9 @@ function requestAccess_(token) {
     if (!existing) {
       const row = header.map(h => ({ Email: email, Name: name, Role: 'user', Active: 'No' })[h] || '');
       sheet.appendRow(row);
+      // Unticked app boxes on the new row, so the admin only has to tick them.
+      const r = sheet.getLastRow();
+      HOME_APPS.forEach(a => { const c = col(a.col); if (c >= 0) sheet.getRange(r, c + 1).insertCheckboxes(); });
       added = true;
     }
   } finally {
@@ -153,7 +225,7 @@ function requestAccess_(token) {
         '👤 ' + esc(name || '-'),
         '📧 ' + esc(email),
         '',
-        'Users sheet: Active = Yes ដើម្បីអនុញ្ញាត / to allow.',
+        'Users sheet: Active = Yes ហើយធីកកម្មវិធី ដើម្បីអនុញ្ញាត / set Active = Yes and tick the apps to allow.',
       ].join('\n') });
     } catch (e) { /* the request is saved in the sheet even if Telegram fails */ }
   }
@@ -365,7 +437,7 @@ const DASH_FIELDS = [
 ];
 
 function dashboardData_(p, user) {
-  if (!isReviewer_(user)) throw new Error('NOACCESS: Only reviewers and admins can open the dashboard.');
+  if (!canUse_(user, 'dashboard')) throw new Error('NOACCESS: Only users with Dashboard ticked in the Users sheet can open the dashboard.');
   const sheet = refillSheet_();
   const values = sheet.getDataRange().getValues();
   const header = values.shift().map(h => String(h).trim());
@@ -412,7 +484,7 @@ function dashboardData_(p, user) {
 }
 
 function dashboardSave_(p, user) {
-  if (!isReviewer_(user)) throw new Error('NOACCESS: Only reviewers and admins can change dashboard settings.');
+  if (!canUse_(user, 'dashboard')) throw new Error('NOACCESS: Only users with Dashboard ticked in the Users sheet can change dashboard settings.');
   const text = JSON.stringify(p.settings || {});
   if (text.length > 45000) throw new Error('Settings are too large.');
   const ss = SpreadsheetApp.getActive();
