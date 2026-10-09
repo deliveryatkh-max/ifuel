@@ -188,6 +188,7 @@ function submitRefill_(p, user) {
 
     const sheet = refillSheet_();
     const cols = headerIndex_(sheet);
+    addNewNames_(p);
     const clean = validate_(p, null);
     // The time Submit was pressed on the phone (it may be sent a little later); server time if it looks wrong.
     const taken = Number(p.takenAt);
@@ -223,7 +224,7 @@ function submitRefill_(p, user) {
       PropertiesService.getScriptProperties().setProperty('SUBMIT_REFS', JSON.stringify(refs));
     }
     sendNow = queueTelegram_(id) === 'now';
-    return { id: id };
+    return { id: id, plate: clean.plate, driver: clean.driver };
   } finally {
     lock.releaseLock();
     if (sendNow) try { sendTelegramQueue(); } catch (e) { console.error(e); }
@@ -244,6 +245,7 @@ function updateRefill_(p, user) {
       if (row[cols[COL.STATUS]]) throw new Error('This entry has already been reviewed and can no longer be edited.');
     }
     const entryTime = row[cols[COL.DATETIME]] instanceof Date ? row[cols[COL.DATETIME]].getTime() : null;
+    addNewNames_(p);
     const clean = validate_(p, p.id, entryTime);
     const put = (name, v) => { if (cols[name] !== undefined) row[cols[name]] = v; };
     put(COL.TYPE, clean.type);
@@ -263,7 +265,7 @@ function updateRefill_(p, user) {
     if (clean.meterRequired && clean.meter === 'hour' && !row[cols[COL.HOUR_PHOTO]]) throw new Error('Hour meter photo is required.');
 
     sheet.getRange(rowNum, 1, 1, row.length).setValues([row]);
-    return { id: p.id };
+    return { id: p.id, plate: clean.plate, driver: clean.driver };
   } finally {
     lock.releaseLock();
   }
@@ -663,6 +665,8 @@ function validate_(p, editingId, entryTime) {
     if (hour && last.hour && hour <= last.hour && !note) throw new Error('Hour meter is not higher than the last reading (' + last.hour + '): please add a note.');
   }
 
+  if (!editingId && !p.pumpPhoto) throw new Error('Fuel pump photo is required.');
+
   let latLong = '';
   if (!editingId) {
     const lat = Number(p.lat), lng = Number(p.lng);
@@ -690,6 +694,69 @@ function readTypes_() {
         defaultEquipment: String(t['Default Equipment'] || '').trim(),
       };
     });
+}
+
+/**
+ * A driver or truck typed in the app that is not in the lists yet (newDriver / newPlate flags) is
+ * added to the "Driver & Truck" sheet first. A new driver gets the next number, written like the
+ * existing rows: ID_DL 39, ឈ្មោះ "មាស តារា", ឈ្មោះតៃកុង "39.មាស តារា". Runs inside the submit lock.
+ */
+function addNewNames_(p) {
+  const wantDriver = p.newDriver && String(p.driver || '').trim();
+  const wantPlate = p.newPlate && String(p.plate || '').trim();
+  if (!wantDriver && !wantPlate) return;
+  const type = readTypes_().find(t => t.name === String(p.type || ''));
+  const lists = driverTruck_();
+  const row = {};
+
+  if (wantPlate && type && type.meter === 'km') {
+    const plate = cleanPlate_(p.plate);
+    if (!/^[A-Z0-9][A-Z0-9.\-]{1,19}$/.test(plate)) throw new Error('Plate "' + p.plate + '" does not look like a plate number.');
+    const key = x => String(x).toUpperCase().replace(/[^A-Z0-9]/g, '');
+    const same = lists.plates.find(x => key(x) === key(plate));
+    p.plate = same || plate;
+    if (!same) row[DT_PLATE] = plate;
+  }
+
+  if (wantDriver) {
+    // Typed names may carry a number already ("39. មាស តារា"): keep only the name.
+    const name = String(p.driver).replace(/^\s*[0-9០-៩]+\s*[.)\-]?\s*/, '').replace(/\s+/g, ' ').trim().slice(0, 60);
+    if (!name) throw new Error('Driver name is required.');
+    const plain = s => String(s).replace(/^\s*[0-9០-៩]+\s*[.)\-]?\s*/, '').replace(/\s+/g, ' ').trim();
+    const same = lists.drivers.find(d => plain(d.name) === name);
+    if (same) {
+      p.driver = same.name;
+    } else {
+      const rows = readTable_(SHEETS.DRIVER_TRUCK);
+      let max = 0, last = null;
+      rows.forEach(r => {
+        const m = String(r[DT_DRIVER] || '').match(/^\s*([0-9០-៩]+)\s*\./);
+        const n = Math.max(toNumber_(r['ID_DL']) || 0, m ? toNumber_(m[1]) || 0 : 0);
+        if (n >= max) { max = n; last = r; }
+      });
+      const no = max + 1;
+      const label = (no < 10 ? '0' : '') + no + '.' + name;
+      row['ID_DL'] = no;
+      row['ឈ្មោះ'] = name;
+      row[DT_DRIVER] = label;
+      if (last && last['ក្រុមហ៊ុន']) row['ក្រុមហ៊ុន'] = last['ក្រុមហ៊ុន'];
+      if (!row[DT_PLATE] && type && type.meter === 'km' && p.plate) row[DT_PLATE] = String(p.plate).trim();
+      p.driver = label;
+    }
+  }
+
+  if (!row[DT_PLATE] && !row[DT_DRIVER]) return;
+  const sheet = SpreadsheetApp.getActive().getSheetByName(SHEETS.DRIVER_TRUCK);
+  const header = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map(h => String(h).trim());
+  sheet.appendRow(header.map(h => row[h] === undefined ? '' : row[h]));
+  delete tableCache_[SHEETS.DRIVER_TRUCK];
+}
+
+/** "3f 8691" or "3F8691" → "3F-8691", the way plates are written in the CODE column. */
+function cleanPlate_(v) {
+  const s = String(v || '').toUpperCase().trim().replace(/[\s_]+/g, '-').replace(/-+/g, '-');
+  const m = s.match(/^(\d[A-Z]{1,2})-?(\d{4})$/);
+  return m ? m[1] + '-' + m[2] : s;
 }
 
 /** Dropdown lists from the "Driver & Truck" sheet: unique plates (CODE) and drivers with their plate. */

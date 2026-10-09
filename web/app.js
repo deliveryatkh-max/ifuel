@@ -171,8 +171,8 @@
           const res = await api('submit', item.payload);
           await outbox.remove(item.ref);
           outbox.sent[item.ref] = res.id;
-          outbox.recent.push({ p: item.payload, at: item.takenAt });   // until the lists come back from the server
-          const p = item.payload;
+          const p = Object.assign({}, item.payload, res.driver ? { driver: res.driver, plate: res.plate } : {});
+          outbox.recent.push({ p, at: item.takenAt });   // until the lists come back from the server
           const row = Object.assign(localRow(p), {
             id: res.id, dateTime: item.takenAt, status: '', reviewedBy: '', user: item.user,
             latLong: `${(+p.lat).toFixed(6)}, ${(+p.lng).toFixed(6)}`,
@@ -246,7 +246,8 @@
     state.editing = null;
     state.form = { type: p.type, plate: p.plate, driver: p.driver, km: p.km || '', hour: p.hour || '',
       litres: p.litres, note: p.note || '', odoPhoto: p.odoPhoto || null, hourPhoto: p.hourPhoto || null,
-      pumpPhoto: p.pumpPhoto || null, signature: p.signature || null, takenAt: item.takenAt };
+      pumpPhoto: p.pumpPhoto || null, signature: p.signature || null, takenAt: item.takenAt,
+      newDriver: !!p.newDriver, newPlate: !!p.newPlate };
     state.gps = { status: 'ok', lat: p.lat, lng: p.lng, acc: 0 };
     go({ s: 'new' });
     toast('សូមកែ ហើយបញ្ជូនម្តងទៀត / Fix it and submit again');
@@ -563,6 +564,17 @@
     return o;
   }
 
+  /** How a new driver will be saved: the next number after the highest one in the list, e.g. "39.មាស តារា". */
+  function newDriverLabel(name) {
+    let max = 0;
+    (state.config.drivers || []).forEach(d => {
+      const m = String(d.name).match(/^\s*([0-9០-៩]+)\s*\./);
+      if (m) max = Math.max(max, toNum(m[1]) || 0);
+    });
+    const no = max + 1;
+    return (no < 10 ? '0' : '') + no + '.' + name;
+  }
+
   /** Returns {errors:[], warnings:[], needNote:bool} for the current form. */
   function check() {
     const f = state.form, t = typeInfo(f.type), errors = [], warnings = [];
@@ -583,6 +595,7 @@
       if (t.required && !(h > 0)) errors.push('កុងទ័រម៉ោង / Hour meter');
       else if (!editing && h > 0 && last && last.hour && h <= last.hour) warnings.push(`ម៉ោង (${fmtNum(h)}) មិនលើសលើកមុន (${fmtNum(last.hour)}) / not higher than last reading`);
     }
+    if (!editing && !f.pumpPhoto) errors.push('រូបថតកុងទ័រសាំង / Fuel pump photo');
     const l = toNum(f.litres);
     if (!(l > 0)) errors.push('ចំនួនចាក់ (លីត្រ) / Litres');
     else if (l > state.config.litreLimit) warnings.push(`${fmtNum(l)} L លើស ${state.config.litreLimit} L / above the limit`);
@@ -597,9 +610,9 @@
     const last = lastFor(f.plate);
     const equip = t ? ((cfg.equipment || {})[t.name] || null) : null;
     const req = t && t.required ? ' <span class="req">*</span>' : '';
-    const pickBtn = (id, value) => `
+    const pickBtn = (id, value, isNew) => `
       <button type="button" class="picker" id="${id}">
-        <span class="${value ? '' : 'ph'}">${esc(value || '— ជ្រើសរើស / Select —')}</span><span class="pk-ic" aria-hidden="true">🔍</span>
+        <span class="${value ? '' : 'ph'}">${esc(value || '— ជ្រើសរើស / Select —')}${isNew ? ' <small class="new-tag">ថ្មី / New</small>' : ''}</span><span class="pk-ic" aria-hidden="true">🔍</span>
       </button>`;
 
     const photoSlot = (key, title, en, required, existing) => `
@@ -629,7 +642,7 @@
         <div class="field">
           ${t.meter === 'km' ? `
             <div class="label"><span>ផ្លាកលេខឡាន <span class="req">*</span></span><small>Plate number</small></div>
-            ${pickBtn('plate', f.plate)}` : equip ? `
+            ${pickBtn('plate', f.plate, f.newPlate)}` : equip ? `
             <div class="label"><span>គ្រឿងចក្រ <span class="req">*</span></span><small>Equipment</small></div>
             ${pickBtn('plate', f.plate)}` : `
             <div class="label"><span>គ្រឿងចក្រ / សម្រាប់អ្វី <span class="req">*</span></span><small>Equipment / purpose</small></div>
@@ -637,7 +650,7 @@
         </div>
         <div class="field">
           <div class="label"><span>ឈ្មោះតៃកុង <span class="req">*</span></span><small>Driver / operator</small></div>
-          ${pickBtn('driver', f.driver)}
+          ${pickBtn('driver', f.newDriver ? newDriverLabel(f.driver) : f.driver, f.newDriver)}
         </div>
       </div>
 
@@ -662,7 +675,7 @@
       </div>` : ''}
 
       <div class="card">
-        <div class="field">${photoSlot('pumpPhoto', 'រូបថតកុងទ័រសាំង', 'Fuel pump photo (optional)', false, editing && editing.pumpPhoto)}</div>
+        <div class="field">${photoSlot('pumpPhoto', 'រូបថតកុងទ័រសាំង', 'Fuel pump photo', !editing, editing && editing.pumpPhoto)}</div>
         <div class="field">
           <div class="label"><span>ចំនួនចាក់ (លីត្រ) <span class="req">*</span></span><small>Litres</small></div>
           <input type="text" inputmode="decimal" id="litres" class="big-input" value="${esc(f.litres)}" placeholder="0" autocomplete="off">
@@ -690,7 +703,7 @@
       const next = typeInfo(b.dataset.type);
       const wasDefault = !f.plate || (t && f.plate === t.defaultEquipment);
       const hasList = x => x && (x.meter === 'km' || (cfg.equipment || {})[x.name]);
-      if (hasList(next) || hasList(t)) f.plate = '';
+      if (hasList(next) || hasList(t)) { f.plate = ''; f.newPlate = false; }
       if (next.defaultEquipment && (wasDefault || !f.plate)) f.plate = next.defaultEquipment;
       else if (t && t.defaultEquipment && f.plate === t.defaultEquipment) f.plate = '';
       f.type = b.dataset.type;
@@ -705,12 +718,22 @@
         const who = t.meter === 'km' ? cfg.drivers.filter(d => d.plate === x).map(d => d.name) : [];
         return { value: x, sub: who.join(', ') };
       });
-      if (f.plate && !list.includes(f.plate)) items.unshift({ value: f.plate, sub: '' });
+      if (f.plate && !list.includes(f.plate)) items.unshift({ value: f.plate, sub: f.newPlate ? 'ថ្មី / New' : '' });
       plate.onclick = () => openPicker({
         title: t.meter === 'km' ? 'ផ្លាកលេខឡាន / Plate number' : 'គ្រឿងចក្រ / Equipment',
         groups: [{ items }], value: f.plate,
-        onPick: v => {
+        // Trucks not in the list yet can be added; equipment stays limited to the Equipment sheet.
+        addNew: t.meter === 'km' ? {
+          clean: q => {
+            const v = q.toUpperCase().trim().replace(/[\s_]+/g, '-').replace(/-+/g, '-');
+            const m = v.match(/^(\d[A-Z]{1,2})-?(\d{4})$/);
+            return m ? m[1] + '-' + m[2] : v;
+          },
+          label: v => `➕ បន្ថែមឡានថ្មី / Add new truck: ${v}`,
+        } : null,
+        onPick: (v, isNew) => {
           f.plate = v;
+          f.newPlate = !!isNew;
           const matches = cfg.drivers.filter(d => d.plate === v);
           if (matches.length === 1) f.driver = matches[0].name;
           renderForm();
@@ -736,7 +759,11 @@
           ? [{ label: `ឡាន ${f.plate} / This truck`, items: linked }, { label: 'ទាំងអស់ / All drivers', items: all.filter(x => !x.mine) }]
           : [{ items: all }],
         value: f.driver,
-        onPick: v => { f.driver = v; renderForm(); },
+        addNew: {
+          clean: q => q.replace(/^\s*[0-9០-៩]+\s*[.)\-]?\s*/, '').replace(/\s+/g, ' ').trim(),
+          label: v => `➕ បន្ថែមតៃកុងថ្មី / Add new driver: ${newDriverLabel(v)}`,
+        },
+        onPick: (v, isNew) => { f.driver = v; f.newDriver = !!isNew; renderForm(); },
       });
     };
     ['km', 'hour', 'litres'].forEach(k => {
@@ -794,14 +821,22 @@
             <span><b>${esc(it.value)}</b>${it.sub ? `<small>${esc(it.sub)}</small>` : ''}</span>${it.value === opts.value ? '<span class="tick">✓</span>' : ''}
           </button>`).join('');
       }).join('');
-      list.innerHTML = html || '<div class="empty">រកមិនឃើញ<br>No match</div>';
+      // Typed text that matches nothing exactly can be added as a new name.
+      const add = opts.addNew && opts.addNew.clean(input.value);
+      const exists = add && opts.groups.some(g => g.items.some(it => norm(it.value) === norm(add) || norm(it.value).replace(/^[0-9]+/, '') === norm(add)));
+      const addRow = add && !exists
+        ? `<button type="button" class="pick-item pick-add" data-add="${esc(add)}"><span><b>${esc(opts.addNew.label(add))}</b></span></button>` : '';
+      list.innerHTML = (html || addRow ? html + addRow : '')
+        || `<div class="empty">រកមិនឃើញ<br>No match${opts.addNew ? '<br><small>វាយឈ្មោះ ដើម្បីបន្ថែមថ្មី / Type a name to add a new one</small>' : ''}</div>`;
     };
     input.oninput = draw;
     list.onclick = e => {
+      const a = e.target.closest('[data-add]');
+      if (a) { sh.close(); opts.onPick(a.dataset.add, true); return; }
       const b = e.target.closest('[data-v]');
       if (!b) return;
       sh.close();
-      opts.onPick(b.dataset.v);
+      opts.onPick(b.dataset.v, false);
     };
     draw();
     const on = $('.pick-item.on', list);
@@ -856,13 +891,14 @@
       odoPhoto: t.meter === 'km' ? f.odoPhoto : null,
       hourPhoto: t.meter === 'hour' ? f.hourPhoto : null,
       pumpPhoto: f.pumpPhoto, signature: f.signature,
+      newDriver: !!f.newDriver, newPlate: !!f.newPlate,
     };
     try {
       if (state.editing) {
         payload.id = state.editing.id;
-        await api('update', payload);
+        const res = await api('update', payload);
         toast('✔️ បានរក្សាទុក / Saved');
-        Object.assign(state.editing, localRow(payload), { updatedAt: Date.now() });
+        Object.assign(state.editing, localRow(Object.assign(payload, res && res.driver ? { driver: res.driver, plate: res.plate } : {})), { updatedAt: Date.now() });
         rv.fetchedAt = 0;
         refreshConfig();
         leaveEdit();
