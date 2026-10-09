@@ -1,0 +1,2 @@
+Icons: Fluent Emoji (Flat) by Microsoft, MIT License.
+https://github.com/microsoft/fluentui-emoji/blob/main/LICENSE

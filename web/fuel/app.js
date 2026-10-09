@@ -348,6 +348,7 @@
 
   function renderLogin(expired) {
     $('#tabs').hidden = true;
+    $('#homeOnly').hidden = false;
     $('#navbar').hidden = true;
     $('#who').innerHTML = '';
     $('#view').innerHTML = `
@@ -457,6 +458,7 @@
   function enterApp() {
     showRole();
     $('#tabs').hidden = false;
+    $('#homeOnly').hidden = true;
     $('#navbar').hidden = false;
     if (!state.form) resetForm();
     if (nav.i >= 0 && nav.stack[nav.i]) paint(nav.stack[nav.i]);
@@ -513,7 +515,7 @@
       : screen.s === 'edit' ? (screen.from || 'mine')
       : screen.s === 'success' ? 'new' : screen.s;
     state.tab = tab;
-    $$('.tab').forEach(b => b.classList.toggle('on', b.dataset.tab === tab));
+    $$('.tab[data-tab]').forEach(b => b.classList.toggle('on', b.dataset.tab === tab));
     $('#navBack').disabled = nav.i <= 0;
     $('#navFwd').disabled = nav.i >= nav.stack.length - 1;
     $('#navTitle').textContent = TITLES[screen.s] || '';
@@ -531,7 +533,7 @@
     if (c && c.s === tab) paint(c);
     else go({ s: tab });
   }
-  $$('.tab').forEach(b => b.onclick = () => show(b.dataset.tab));
+  $$('.tab[data-tab]').forEach(b => b.onclick = () => show(b.dataset.tab));
 
   function toast(msg) {
     const t = $('#toast');

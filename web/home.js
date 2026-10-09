@@ -3,13 +3,7 @@
 (function () {
   'use strict';
 
-  const ICON = {
-    fuel: '<path d="M4 20V5a2 2 0 0 1 2-2h7a2 2 0 0 1 2 2v15M3 20h13M7 7h5v4H7zM15 9h2a2 2 0 0 1 2 2v5a1.5 1.5 0 0 0 3 0V8l-3-3"/>',
-    transport: '<path d="M2 6h11v10H2zM13 9h4l4 4v3h-8M6.5 19.5a2 2 0 1 0 0-.01M17.5 19.5a2 2 0 1 0 0-.01M2 16h2.5M8.5 16h7"/>',
-    overtime: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2M19 3l2 2M5 3 3 5"/>',
-    location: '<path d="M12 21s-7-6.2-7-11.5a7 7 0 0 1 14 0C19 14.8 12 21 12 21z"/><circle cx="12" cy="9.5" r="2.5"/>',
-    dashboard: '<path d="M3 3v18h18M7 15v2M11 11v6M15 7v10M19 12v5"/>',
-  };
+  // Colourful flat icons in web/icons/ (Fluent Emoji Flat, MIT licence).
   // url '' = not built yet: the tile shows "Coming soon".
   const APPS = [
     { key: 'fuel', kh: 'ចាក់សាំង', en: 'Fuel Refill', url: 'fuel/' },
@@ -67,7 +61,7 @@
     $('#view').innerHTML = mine.length ? `
       <p class="hello">សួស្តី <b>${esc(name)}</b> · ជ្រើសរើសកម្មវិធី / Choose an app</p>
       <div class="grid">${mine.map(a => {
-        const inner = `<span class="ico c-${a.key}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICON[a.key] || ''}</svg></span>
+        const inner = `<span class="ico"><img src="icons/${esc(a.key)}.svg" alt="" width="66" height="66"></span>
           <span class="t">${esc(a.kh)}${a.en !== a.kh ? `<small>${esc(a.en)}</small>` : ''}</span>
           ${a.url ? '' : '<span class="badge">មកដល់ឆាប់ៗ · Soon</span>'}`;
         return a.url ? `<a class="tile" href="${esc(a.url)}">${inner}</a>`

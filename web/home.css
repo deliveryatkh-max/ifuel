@@ -34,7 +34,7 @@ button { font: inherit; color: inherit; }
 }
 .bar.busy { box-shadow: inset 0 -3px 0 #61cbf4; }
 .brand { display: flex; align-items: center; gap: 10px; line-height: 1.15; min-width: 0; }
-.brand svg { color: #61cbf4; flex: none; }
+.brand .logo { flex: none; border-radius: 50%; background: #fff; }
 .brand b { font-size: 18px; }
 .brand small { color: rgba(255,255,255,.75); white-space: nowrap; }
 .bar-right { display: flex; align-items: center; gap: 6px; min-width: 0; }
@@ -63,22 +63,18 @@ main { max-width: 1080px; margin: 0 auto; padding: 18px 16px 32px; }
 .tile:hover { border-color: var(--accent); box-shadow: 0 6px 18px rgba(1, 30, 65, .12); }
 .tile:active { transform: scale(.97); }
 .tile .ico {
-  display: flex; align-items: center; justify-content: center; width: 92px; height: 92px; border-radius: 26px; color: #fff;
+  display: flex; align-items: center; justify-content: center; width: 96px; height: 96px; border-radius: 28px; background: var(--soft);
 }
-.tile .ico svg { width: 56px; height: 56px; }
+.tile .ico img { width: 66px; height: 66px; display: block; }
+.tile:hover .ico img { transform: scale(1.06); transition: transform .12s; }
 .tile .t { font-size: 18px; font-weight: 700; line-height: 1.25; }
 .tile .t small { font-size: 13px; margin-top: 2px; }
 .tile.soon { cursor: default; }
-.tile.soon .ico { filter: grayscale(.35); opacity: .55; }
+.tile.soon .ico { filter: grayscale(.6); opacity: .6; }
 .tile .badge {
   font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 99px;
   background: var(--soft); color: var(--brand);
 }
-.c-fuel { background: linear-gradient(135deg, #0b76a0, #084f6a); }
-.c-transport { background: linear-gradient(135deg, #084f6a, #011e41); }
-.c-overtime { background: linear-gradient(135deg, #61cbf4, #0b76a0); }
-.c-location { background: linear-gradient(135deg, #0b76a0, #011e41); }
-.c-dashboard { background: linear-gradient(135deg, #011e41, #084f6a); }
 
 .card { background: var(--card); border: 1px solid var(--line); border-radius: 18px; padding: 28px 20px; text-align: center; box-shadow: var(--shadow); max-width: 440px; margin: 24px auto; }
 .card .big { font-size: 46px; line-height: 1; margin-bottom: 8px; }

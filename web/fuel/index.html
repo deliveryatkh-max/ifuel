@@ -8,13 +8,13 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Khmer:wght@400;600;700&display=swap" rel="stylesheet">
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⛽</text></svg>">
+  <link rel="icon" type="image/png" href="../icons/favicon.png">
+  <link rel="apple-touch-icon" href="../icons/app-180.png">
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
   <div class="head">
     <header class="topbar">
-      <a class="home-btn" href="../" aria-label="ទំព័រដើម / Home" title="ទំព័រដើម / Home"><svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M3 11l9-7 9 7M5 10v10h5v-6h4v6h5V10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></a>
       <div class="brand"><span class="logo">⛽</span><div><b>ចាក់សាំង</b><small>Fuel Refill</small></div></div>
       <div class="top-right">
         <div class="who" id="who"></div>
@@ -33,9 +33,14 @@
   <main id="view"></main>
 
   <nav class="tabs" id="tabs" hidden>
+    <a href="../" class="tab home-tab"><span><img src="../icons/home.svg" alt="" width="24" height="24"></span>ទំព័រដើម<small>Home</small></a>
     <button data-tab="new" class="tab"><span>➕</span>បញ្ចូលថ្មី<small>New</small></button>
     <button data-tab="mine" class="tab"><span>📋</span>របស់ខ្ញុំ<small>My entries</small></button>
     <button data-tab="review" class="tab" id="reviewTab" hidden><span>✅</span>អ្នកត្រួតពិនិត្យ<small>Reviewer</small></button>
+  </nav>
+
+  <nav class="tabs" id="homeOnly">
+    <a href="../" class="tab home-tab"><span><img src="../icons/home.svg" alt="" width="24" height="24"></span>ទំព័រដើម<small>Home</small></a>
   </nav>
 
   <div id="toast" class="toast" hidden></div>
