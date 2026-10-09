@@ -179,7 +179,7 @@ function getConfig_(payload, user) {
 function submitRefill_(p, user) {
   const lock = LockService.getScriptLock();
   lock.waitLock(20000);
-  let sendNow = false;
+  let tgPost = null;
   try {
     // The phone sends each entry with a ref and may send it again if the answer got lost: save it once.
     const ref = String(p.ref || '').slice(0, 64);
@@ -223,11 +223,20 @@ function submitRefill_(p, user) {
       keys.slice(0, Math.max(0, keys.length - 300)).forEach(k => delete refs[k]);   // keep the last 300
       PropertiesService.getScriptProperties().setProperty('SUBMIT_REFS', JSON.stringify(refs));
     }
-    sendNow = queueTelegram_(id) === 'now';
+    if (telegramReady_()) {
+      tgPost = { id: id, type: clean.type, plate: clean.plate, driver: clean.driver, km: clean.km, hour: clean.hour,
+        litres: clean.litres, dateTime: now.getTime(), note: clean.note,
+        odoPhoto: p.odoPhoto, hourPhoto: p.hourPhoto, pumpPhoto: p.pumpPhoto };
+    }
     return { id: id, plate: clean.plate, driver: clean.driver };
   } finally {
     lock.releaseLock();
-    if (sendNow) try { sendTelegramQueue(); } catch (e) { console.error(e); }
+    // Posted straight away (a few seconds), using the photos already in hand. Google's timed triggers can
+    // take minutes to run, so the queue + trigger is only the fallback when Telegram fails.
+    if (tgPost) {
+      try { postRefillToTelegram_(tgPost); }
+      catch (e) { console.error('Telegram post failed for ' + tgPost.id + ': ' + e); queueTelegram_(tgPost.id); }
+    }
   }
 }
 
@@ -517,6 +526,9 @@ function postRefillToTelegram_(r) {
 }
 
 function telegramPhoto_(url) {
+  // A photo just sent from the phone (data URL) is used as is; saved entries load it from Drive.
+  const m = /^data:(image\/(jpeg|png));base64,(.+)$/.exec(String(url || ''));
+  if (m) return Utilities.newBlob(Utilities.base64Decode(m[3]), m[1], 'photo.' + (m[2] === 'png' ? 'png' : 'jpg'));
   const id = fileIdFromUrl_(url);
   if (!id) return null;
   try {
