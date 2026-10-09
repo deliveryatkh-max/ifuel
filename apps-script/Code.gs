@@ -261,7 +261,7 @@ function updateRefill_(p, user) {
     if (p.hourPhoto) put(COL.HOUR_PHOTO, savePhoto_(p.hourPhoto, p.id, 'hourmeter'));
     if (p.pumpPhoto) put(COL.PUMP_PHOTO, savePhoto_(p.pumpPhoto, p.id, 'pump'));
     if (p.signature) put(COL.SIGNATURE, savePhoto_(p.signature, p.id, 'signature'));
-    if (clean.meterRequired && clean.meter === 'km' && !row[cols[COL.ODO_PHOTO]]) throw new Error('Odometer photo is required.');
+    if (clean.meterRequired && clean.meter === 'km' && !clean.meterBroken && !row[cols[COL.ODO_PHOTO]]) throw new Error('Odometer photo is required.');
     if (clean.meterRequired && clean.meter === 'hour' && !row[cols[COL.HOUR_PHOTO]]) throw new Error('Hour meter photo is required.');
 
     sheet.getRange(rowNum, 1, 1, row.length).setValues([row]);
@@ -644,17 +644,21 @@ function validate_(p, editingId, entryTime) {
   const litres = toNumber_(p.litres);
   if (!(litres > 0)) throw new Error('Litres must be more than 0.');
 
-  const note = String(p.note || '').trim();
+  // "Meter broken" ticked in the app: no km and no odometer photo; the note says so for the reviewer.
+  const broken = meter === 'km' && !!p.meterBroken;
+  const brokenText = 'កុងទ័រខូច / Odometer broken';
+  let note = String(p.note || '').trim();
+  if (broken && note.indexOf(brokenText) !== 0) note = brokenText + (note ? ' · ' + note : '');
   const limit = Number(getSetting_('LITRE_LIMIT')) || 250;
   if (litres > limit && !note) throw new Error('More than ' + limit + ' L: please add a note.');
 
   let km = null, hour = null;
   const last = lastReadings_(editingId, entryTime)[plate] || {};
   if (meter === 'km') {
-    km = toNumber_(p.km);
+    km = broken ? null : toNumber_(p.km);
     if (isNaN(km)) km = null;
-    if (type.required && !(km > 0)) throw new Error('Odometer (km) is required.');
-    if (type.required && !editingId && !p.odoPhoto) throw new Error('Odometer photo is required.');
+    if (type.required && !broken && !(km > 0)) throw new Error('Odometer (km) is required, or tick Meter broken.');
+    if (type.required && !broken && !editingId && !p.odoPhoto) throw new Error('Odometer photo is required.');
     if (km && last.km && km <= last.km && !note) throw new Error('Km is not higher than the last reading (' + last.km + '): please add a note.');
   }
   if (meter === 'hour') {
@@ -675,7 +679,7 @@ function validate_(p, editingId, entryTime) {
   }
 
   return { type: type.name, meter: meter, meterRequired: type.required, plate: plate, driver: driver,
-           km: km, hour: hour, litres: litres, note: note, latLong: latLong };
+           km: km, hour: hour, litres: litres, note: note, latLong: latLong, meterBroken: broken };
 }
 
 // ---------- Data helpers ----------

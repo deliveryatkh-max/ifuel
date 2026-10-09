@@ -236,6 +236,13 @@ select:focus, input:focus, textarea:focus { outline: none; border-color: var(--b
 .pick-item .tick { font-weight: 700; color: var(--brand); }
 .pick-item.pick-add { color: var(--ok); border-top: 1.5px dashed var(--line); }
 .pick-item.pick-add b { font-weight: 700; }
+.km-row { display: flex; gap: 10px; align-items: stretch; }
+.km-row input[type=text] { flex: 1; min-width: 0; }
+.km-row input[type=text]:disabled { background: var(--line); opacity: .6; }
+.broken { display: flex; align-items: center; gap: 8px; padding: 0 12px; border: 1.5px solid var(--line); border-radius: 12px; cursor: pointer; font-weight: 700; color: var(--bad); }
+.broken small { display: block; font-weight: 500; font-size: 12px; color: var(--muted); }
+.broken input { width: 24px; height: 24px; accent-color: var(--bad); }
+.broken.off { opacity: .4; cursor: not-allowed; }
 .add-box { padding: 4px 0 10px; display: grid; gap: 8px; }
 .add-box .add-open { width: 100%; }
 .add-box .add-preview { font-size: 14px; color: var(--muted, #667); min-height: 18px; }

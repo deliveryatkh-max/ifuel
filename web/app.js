@@ -246,7 +246,7 @@
     state.editing = null;
     state.form = { type: p.type, plate: p.plate, driver: p.driver, km: p.km || '', hour: p.hour || '',
       litres: p.litres, note: p.note || '', odoPhoto: p.odoPhoto || null, hourPhoto: p.hourPhoto || null,
-      pumpPhoto: p.pumpPhoto || null, signature: p.signature || null, takenAt: item.takenAt,
+      pumpPhoto: p.pumpPhoto || null, signature: p.signature || null, takenAt: item.takenAt, meterBroken: !!p.meterBroken,
       newDriver: !!p.newDriver, newPlate: !!p.newPlate };
     state.gps = { status: 'ok', lat: p.lat, lng: p.lng, acc: 0 };
     go({ s: 'new' });
@@ -584,9 +584,9 @@
     if (!f.driver) errors.push('ឈ្មោះតៃកុង / Driver');
     const last = lastFor(f.plate);
     if (t.meter === 'km') {
-      if (t.required && !f.odoPhoto && !(editing && state.editing.odoPhoto)) errors.push('រូបថតកុងទ័រឡាន / Odometer photo');
-      const km = toNum(f.km);
-      if (t.required && !(km > 0)) errors.push('លេខកុងទ័រ (Km) / Odometer');
+      if (t.required && !f.meterBroken && !f.odoPhoto && !(editing && state.editing.odoPhoto)) errors.push('រូបថតកុងទ័រឡាន / Odometer photo');
+      const km = f.meterBroken ? 0 : toNum(f.km);
+      if (t.required && !f.meterBroken && !(km > 0)) errors.push('លេខកុងទ័រ (Km) ឬ ធីក កុងទ័រខូច / Odometer, or tick Meter broken');
       else if (!editing && km > 0 && last && last.km && km <= last.km) warnings.push(`Km (${fmtNum(km)}) មិនលើសលើកមុន (${fmtNum(last.km)}) / not higher than last reading`);
     }
     if (t.meter === 'hour') {
@@ -656,10 +656,14 @@
 
       ${t.meter === 'km' ? `
       <div class="card">
-        <div class="field">${photoSlot('odoPhoto', 'រូបថតកុងទ័រឡាន', t.required ? 'Odometer photo' : 'Odometer photo (optional)', t.required, editing && editing.odoPhoto)}</div>
+        <div class="field">${photoSlot('odoPhoto', 'រូបថតកុងទ័រឡាន', t.required && !f.meterBroken ? 'Odometer photo' : 'Odometer photo (optional)', t.required && !f.meterBroken, editing && editing.odoPhoto)}</div>
         <div class="field">
-          <div class="label"><span>លេខកុងទ័រ (Km)${req}</span><small>Odometer${t.required ? '' : ' (optional)'}</small></div>
-          <input type="text" inputmode="decimal" id="km" class="big-input" value="${esc(f.km)}" placeholder="0" autocomplete="off">
+          <div class="label"><span>លេខកុងទ័រ (Km)${f.meterBroken ? '' : req}</span><small>Odometer${t.required ? '' : ' (optional)'}</small></div>
+          <div class="km-row">
+            <input type="text" inputmode="decimal" id="km" class="big-input" value="${f.meterBroken ? '' : esc(f.km)}" placeholder="${f.meterBroken ? '—' : '0'}" autocomplete="off" ${f.meterBroken ? 'disabled' : ''}>
+            <label class="broken ${toNum(f.km) > 0 && !f.meterBroken ? 'off' : ''}"><span>កុងទ័រខូច<small>Meter broken</small></span>
+              <input type="checkbox" id="meterBroken" ${f.meterBroken ? 'checked' : ''} ${toNum(f.km) > 0 && !f.meterBroken ? 'disabled' : ''}></label>
+          </div>
           ${last && last.km ? `<div class="hint">លើកមុន / Last: <b>${fmtNum(last.km)} km</b> · ${fmtDate(last.kmAt)}</div>` : ''}
         </div>
       </div>` : ''}
@@ -776,6 +780,18 @@
       const el = $('#' + k);
       if (el) el.oninput = () => { f[k] = el.value; updateWarnings(); };
     });
+    // Meter broken and a km number exclude each other: ticking clears and locks Km, typing a number locks the tick box.
+    const broken = $('#meterBroken');
+    if (broken) {
+      const kmEl = $('#km');
+      const sync = () => {
+        const hasKm = toNum(kmEl.value) > 0;
+        broken.disabled = hasKm && !f.meterBroken;
+        broken.closest('.broken').classList.toggle('off', broken.disabled);
+      };
+      kmEl.addEventListener('input', sync);
+      broken.onchange = () => { f.meterBroken = broken.checked; if (f.meterBroken) f.km = ''; renderForm(); };
+    }
     $('#note').oninput = e => { f.note = e.target.value; };
 
     $$('[data-photo]').forEach(slot => slot.onclick = () => photoSheet(slot.dataset.photo, slot.dataset.title));
@@ -913,7 +929,8 @@
     const t = typeInfo(f.type);
     const payload = {
       type: f.type, plate: f.plate.trim(), driver: f.driver,
-      km: t.meter === 'km' ? f.km : '', hour: t.meter === 'hour' ? f.hour : '',
+      km: t.meter === 'km' && !f.meterBroken ? f.km : '', hour: t.meter === 'hour' ? f.hour : '',
+      meterBroken: t.meter === 'km' && !!f.meterBroken,
       litres: f.litres, note: f.note.trim(),
       odoPhoto: t.meter === 'km' ? f.odoPhoto : null,
       hourPhoto: t.meter === 'hour' ? f.hourPhoto : null,
@@ -1353,9 +1370,13 @@
     if (!state.editing) state.draft = state.form;
     state.editing = r;
     state.returnTo = screen.from;
+    // The server writes "កុងទ័រខូច / Odometer broken" at the start of the note; the edit form shows it as the tick box.
+    const brokenNote = /^កុងទ័រខូច \/ Odometer broken(\s*·\s*)?/;
+    const wasBroken = r.km == null && brokenNote.test(r.note || '');
     state.form = { type: r.type, plate: r.plate, driver: r.driver,
-      km: r.km == null ? '' : String(r.km), hour: r.hour == null ? '' : String(r.hour),
-      litres: String(r.litres), note: r.note || '', odoPhoto: null, hourPhoto: null, pumpPhoto: null, signature: null };
+      km: r.km == null ? '' : String(r.km), hour: r.hour == null ? '' : String(r.hour), meterBroken: wasBroken,
+      litres: String(r.litres), note: wasBroken ? (r.note || '').replace(brokenNote, '') : (r.note || ''),
+      odoPhoto: null, hourPhoto: null, pumpPhoto: null, signature: null };
     renderForm();
   }
 
