@@ -41,6 +41,9 @@ const COL = {
 // Columns in the "Driver & Truck" sheet used for the dropdowns.
 const DT_DRIVER = 'ឈ្មោះតៃកុង';
 const DT_PLATE = 'CODE';
+const MIN_KM = 1000;
+// "Odometer Broken?" column in Driver & Truck: Yes = this truck's odometer is broken.
+const DT_BROKEN = /odometer\s*broken/i;
 
 const STATUS_OK = 'ត្រឹមត្រូវ';
 const STATUS_BAD = 'មិនត្រឹមត្រូវ';
@@ -170,6 +173,7 @@ function getConfig_(payload, user) {
     types: readTypes_(),
     plates: lists.plates,
     drivers: lists.drivers,
+    brokenPlates: lists.brokenPlates,
     equipment: equipmentByType_(),
     litreLimit: Number(getSetting_('LITRE_LIMIT')) || 250,
     lastReadings: lastReadings_(),
@@ -400,6 +404,7 @@ function dashboardData_(p, user) {
       no: d['ID_DL'], name: String(d['ឈ្មោះ'] || '').trim(),
       label: String(d[DT_DRIVER] || '').trim(), plate: String(d[DT_PLATE] || '').trim(),
     })).filter(d => d.label || d.name),
+    brokenPlates: driverTruck_().brokenPlates,
     settings: dashSettings_(),
     user: { name: user.name, role: user.role },
     generatedAt: Date.now(),
@@ -745,6 +750,8 @@ function validate_(p, editingId, entryTime) {
     if (isNaN(km)) km = null;
     if (type.required && !broken && !(km > 0)) throw new Error('Odometer (km) is required, or tick Meter broken.');
     if (type.required && !broken && !editingId && !p.odoPhoto) throw new Error('Odometer photo is required.');
+    // 0, 1, 100… typed because the meter can't be read: ask for the tick box instead. New trucks (last reading under 1,000) are fine.
+    if (km > 0 && km < MIN_KM && !(last.km && last.km < MIN_KM)) throw new Error('Km ' + km + ' looks wrong (under ' + MIN_KM + '). If the odometer is broken, tick Meter broken.');
     if (km && last.km && km <= last.km && !note) throw new Error('Km is not higher than the last reading (' + last.km + '): please add a note.');
   }
   if (meter === 'hour') {
@@ -860,7 +867,19 @@ function driverTruck_() {
     if (name && !drivers.some(d => d.name === name)) drivers.push({ name: name, plate: code });
   });
   plates.sort();
-  return { plates: plates, drivers: drivers };
+  return { plates: plates, drivers: drivers, brokenPlates: brokenPlates_(rows) };
+}
+
+/** Plates whose "Odometer Broken?" cell says Yes (also accepts Y, True, ខូច). */
+function brokenPlates_(rows) {
+  const out = [];
+  rows.forEach(r => {
+    const key = Object.keys(r).find(k => DT_BROKEN.test(k));
+    const v = key ? String(r[key] || '').trim().toLowerCase() : '';
+    const code = String(r[DT_PLATE] || '').trim();
+    if (code && /^(yes|y|true|ខូច|បាទ|ចាស)$/.test(v) && out.indexOf(code) < 0) out.push(code);
+  });
+  return out;
 }
 
 /** Equipment dropdowns per refill type from the "Equipment" sheet. Types without rows use free text. */

@@ -7,6 +7,8 @@
   const STATUS_OK = 'ត្រឹមត្រូវ';
   const STATUS_BAD = 'មិនត្រឹមត្រូវ';
   const TOKEN_KEY = 'fr_id_token';
+  const MIN_KM = 1000;        // lower km readings are placeholders (0, 1, 100…), same rule as the server
+  const MAX_JUMP_KM = 2000;   // more than this since the last refill needs a note
 
   const $ = (sel, root) => (root || document).querySelector(sel);
   const $$ = (sel, root) => Array.from((root || document).querySelectorAll(sel));
@@ -270,7 +272,7 @@
             if (r.km > 1 && r.dateTime > o.kmAt) { o.km = r.km; o.kmAt = r.dateTime; }
             if (r.hour > 1 && r.dateTime > o.hourAt) { o.hour = r.hour; o.hourAt = r.dateTime; }
           });
-          return resolve({ user, types: D.types, plates: D.plates, drivers: D.drivers, equipment: D.equipment, litreLimit: D.litreLimit, lastReadings: last });
+          return resolve({ user, types: D.types, plates: D.plates, drivers: D.drivers, equipment: D.equipment, litreLimit: D.litreLimit, lastReadings: last, brokenPlates: D.brokenPlates || [] });
         }
         const savePhotos = (r, src) => ['odoPhoto', 'hourPhoto', 'pumpPhoto', 'signature'].forEach(k => {
           if (src[k]) { const key = 'demo://' + r.id + '/' + k + '/' + Date.now(); demo.photos[key] = src[k]; r[k] = key; }
@@ -547,6 +549,8 @@
     startGps();
   }
 
+  const plateBroken = plate => (state.config.brokenPlates || []).includes(plate);
+
   function typeInfo(name) {
     return (state.config.types || []).find(t => t.name === name) || null;
   }
@@ -587,7 +591,10 @@
       if (t.required && !f.meterBroken && !f.odoPhoto && !(editing && state.editing.odoPhoto)) errors.push('រូបថតកុងទ័រឡាន / Odometer photo');
       const km = f.meterBroken ? 0 : toNum(f.km);
       if (t.required && !f.meterBroken && !(km > 0)) errors.push('លេខកុងទ័រ (Km) ឬ ធីក កុងទ័រខូច / Odometer, or tick Meter broken');
+      // 0, 1, 100… are typed when the meter can't be read: the tick box is the right answer. New trucks (last reading under 1,000) are fine.
+      else if (km > 0 && km < MIN_KM && !(last && last.km && last.km < MIN_KM)) errors.push(`Km ${fmtNum(km)} មិនត្រឹមត្រូវ (តិចជាង ${fmtNum(MIN_KM)}) បើកុងទ័រខូច សូមធីក កុងទ័រខូច / Km looks wrong; if the meter is broken, tick Meter broken`);
       else if (!editing && km > 0 && last && last.km && km <= last.km) warnings.push(`Km (${fmtNum(km)}) មិនលើសលើកមុន (${fmtNum(last.km)}) / not higher than last reading`);
+      else if (!editing && km > 0 && last && last.km && km - last.km > MAX_JUMP_KM) warnings.push(`Km លើសលើកមុន ${fmtNum(km - last.km)} km (លើកមុន ${fmtNum(last.km)}) / more than ${fmtNum(MAX_JUMP_KM)} km since last reading`);
     }
     if (t.meter === 'hour') {
       if (t.required && !f.hourPhoto && !(editing && state.editing.hourPhoto)) errors.push('រូបថតកុងទ័រម៉ោង / Hour meter photo');
@@ -664,6 +671,7 @@
             <label class="broken ${toNum(f.km) > 0 && !f.meterBroken ? 'off' : ''}"><span>កុងទ័រខូច<small>Meter broken</small></span>
               <input type="checkbox" id="meterBroken" ${f.meterBroken ? 'checked' : ''} ${toNum(f.km) > 0 && !f.meterBroken ? 'disabled' : ''}></label>
           </div>
+          ${plateBroken(f.plate) ? `<div class="hint">🔧 ឡាននេះកុងទ័រខូច (Driver &amp; Truck) / This truck's odometer is marked broken</div>` : ''}
           ${last && last.km ? `<div class="hint">លើកមុន / Last: <b>${fmtNum(last.km)} km</b> · ${fmtDate(last.kmAt)}</div>` : ''}
         </div>
       </div>` : ''}
@@ -743,6 +751,9 @@
           f.newPlate = !!isNew;
           const matches = cfg.drivers.filter(d => d.plate === v);
           if (matches.length === 1) f.driver = matches[0].name;
+          // Trucks marked "Odometer Broken? = Yes" in Driver & Truck get Meter broken ticked for them.
+          if (plateBroken(v)) { f.meterBroken = true; f.km = ''; f.autoBroken = true; }
+          else if (f.autoBroken) { f.meterBroken = false; f.autoBroken = false; }
           renderForm();
         },
       });
