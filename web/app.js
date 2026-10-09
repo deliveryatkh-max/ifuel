@@ -724,6 +724,9 @@
         groups: [{ items }], value: f.plate,
         // Trucks not in the list yet can be added; equipment stays limited to the Equipment sheet.
         addNew: t.meter === 'km' ? {
+          button: '➕ បន្ថែមឡានថ្មី / Add new truck',
+          placeholder: 'ផ្លាកលេខ ឧ. 3F-1234 / Plate e.g. 3F-1234',
+          saved: v => v,
           clean: q => {
             const v = q.toUpperCase().trim().replace(/[\s_]+/g, '-').replace(/-+/g, '-');
             const m = v.match(/^(\d[A-Z]{1,2})-?(\d{4})$/);
@@ -760,6 +763,9 @@
           : [{ items: all }],
         value: f.driver,
         addNew: {
+          button: '➕ បន្ថែមតៃកុងថ្មី / Add new driver',
+          placeholder: 'ឈ្មោះ ឧ. មាស តារា / Name e.g. មាស តារា',
+          saved: v => newDriverLabel(v),
           clean: q => q.replace(/^\s*[0-9០-៩]+\s*[.)\-]?\s*/, '').replace(/\s+/g, ' ').trim(),
           label: v => `➕ បន្ថែមតៃកុងថ្មី / Add new driver: ${newDriverLabel(v)}`,
         },
@@ -808,8 +814,29 @@
   function openPicker(opts) {
     const sh = openSheet(opts.title, `
       <label class="search"><span aria-hidden="true">🔍</span><input type="search" placeholder="ស្វែងរក / Search" autocomplete="off" enterkeyhint="search"></label>
+      ${opts.addNew ? `<div class="add-box"><button type="button" class="btn ok small add-open">${esc(opts.addNew.button)}</button></div>` : ''}
       <div class="pick-list"></div>`, 'picker-sheet');
     const input = $('input', sh.el), list = $('.pick-list', sh.el);
+    // "Add new" opens a small form inside the list: type the name, see how it will be saved, tap Add.
+    const addOpen = $('.add-open', sh.el);
+    if (addOpen) addOpen.onclick = () => {
+      const box = $('.add-box', sh.el);
+      box.innerHTML = `<input type="text" class="add-input" placeholder="${esc(opts.addNew.placeholder)}" autocomplete="off" enterkeyhint="done">
+        <div class="add-preview"></div>
+        <div class="add-actions"><button type="button" class="btn small add-cancel">បោះបង់ / Cancel</button><button type="button" class="btn ok small add-save" disabled>➕ បន្ថែម / Add</button></div>`;
+      const ai = $('.add-input', box), save = $('.add-save', box), pv = $('.add-preview', box);
+      const upd = () => {
+        const v = opts.addNew.clean(ai.value);
+        const same = v && opts.groups.some(g => g.items.find(it => norm(it.value) === norm(v) || norm(it.value).replace(/^[0-9]+/, '') === norm(v)));
+        save.disabled = !v || same;
+        pv.innerHTML = !v ? '' : same ? '<span class="bad-t">មានក្នុងបញ្ជីរួចហើយ ស្វែងរកខាងលើ / Already in the list, search above</span>'
+          : `រក្សាទុកជា / Saved as: <b>${esc(opts.addNew.saved(v))}</b>`;
+      };
+      ai.value = input.value; ai.oninput = upd; upd(); ai.focus();
+      ai.onkeydown = e => { if (e.key === 'Enter' && !save.disabled) save.click(); };
+      save.onclick = () => { const v = opts.addNew.clean(ai.value); sh.close(); opts.onPick(v, true); };
+      $('.add-cancel', box).onclick = () => { box.innerHTML = ''; box.appendChild(addOpen); };
+    };
     const norm = v => String(v || '').toLowerCase().replace(/[\s\-.]/g, '').replace(/[០-៩]/g, d => KH.indexOf(d));
     const draw = () => {
       const q = norm(input.value);
