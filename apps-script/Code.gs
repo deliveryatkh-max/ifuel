@@ -422,7 +422,48 @@ function dashboardSave_(p, user) {
     ['settings', text],
     ['updated', user.email + ' ' + Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm')],
   ]);
-  return { saved: true };
+  const odo = p.odometer && typeof p.odometer === 'object' ? p.odometer : {};
+  return { saved: true, odometer: setOdometer_(odo) };
+}
+
+/**
+ * Dashboard Settings › Plates › Good / Odometer Broken: writes Yes (broken) or No (good) in the
+ * "Odometer Broken?" column of Driver & Truck for every row with that plate. Only that column changes.
+ */
+function setOdometer_(odo) {
+  const plates = Object.keys(odo).map(k => String(k).trim().toUpperCase()).filter(Boolean);
+  if (!plates.length) return { updated: 0, missing: [] };
+  const want = {};
+  Object.keys(odo).forEach(k => { want[String(k).trim().toUpperCase()] = odo[k] === 'broken' ? 'Yes' : 'No'; });
+  const lock = LockService.getScriptLock();
+  lock.waitLock(20000);
+  try {
+    const sheet = SpreadsheetApp.getActive().getSheetByName(SHEETS.DRIVER_TRUCK);
+    const lastCol = sheet.getLastColumn();
+    const header = sheet.getRange(1, 1, 1, lastCol).getValues()[0].map(h => String(h).trim());
+    const codeCol = header.indexOf(DT_PLATE);
+    if (codeCol < 0) throw new Error('CODE column not found in Driver & Truck.');
+    let col = header.findIndex(h => DT_BROKEN.test(h));
+    if (col < 0) { col = lastCol; sheet.getRange(1, col + 1).setValue('Odometer Broken?'); }
+    const n = sheet.getLastRow() - 1;
+    if (n < 1) return { updated: 0, missing: plates };
+    const codes = sheet.getRange(2, codeCol + 1, n, 1).getValues();
+    const cells = sheet.getRange(2, col + 1, n, 1);
+    const vals = cells.getValues();
+    const found = {};
+    let updated = 0;
+    codes.forEach((c, i) => {
+      const code = String(c[0] || '').trim().toUpperCase();
+      if (!want[code]) return;
+      found[code] = true;
+      if (String(vals[i][0]).trim() !== want[code]) { vals[i][0] = want[code]; updated++; }
+    });
+    if (updated) cells.setValues(vals);
+    delete tableCache_[SHEETS.DRIVER_TRUCK];
+    return { updated: updated, missing: plates.filter(x => !found[x]) };
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 function dashSettings_() {
