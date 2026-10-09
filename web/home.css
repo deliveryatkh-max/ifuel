@@ -99,3 +99,8 @@ main { max-width: 1080px; margin: 0 auto; padding: 18px 16px 32px; }
   position: fixed; left: 50%; bottom: calc(24px + env(safe-area-inset-bottom)); transform: translateX(-50%); z-index: 20;
   background: #011e41; color: #fff; padding: 10px 16px; border-radius: 12px; font-size: 14px; max-width: calc(100% - 32px); text-align: center;
 }
+
+/* Language switch: 🇰🇭 / 🇬🇧, the active flag is bright. */
+.lang-btn { width: auto; gap: 4px; padding: 0 7px; }
+.lang-btn img { width: 22px; height: 15px; border-radius: 3px; object-fit: cover; opacity: .4; filter: grayscale(.7); transition: opacity .12s, filter .12s; }
+.lang-btn img.on { opacity: 1; filter: none; box-shadow: 0 0 0 1.5px #fff; }

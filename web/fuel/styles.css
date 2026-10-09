@@ -184,6 +184,7 @@ a.tab { display: block; text-align: center; text-decoration: none; }
 .tab.home-tab span { height: 26px; display: flex; align-items: center; justify-content: center; }
 #homeOnly .home-tab { flex: 1; border-right: 0; }
 .tab small { font-size: 10px; }
+.tab .lb { display: block; font-weight: 600; }
 .tab.on { color: var(--brand); }
 
 .toast { position: fixed; left: 50%; bottom: calc(90px + env(safe-area-inset-bottom)); transform: translateX(-50%); background: #1b2430; color: #fff;
@@ -343,3 +344,9 @@ a.tab { display: block; text-align: center; text-decoration: none; }
 .ob-note .btn { flex: none; }
 .send-state { display: flex; align-items: center; justify-content: center; gap: 10px; text-align: left; margin: 8px 0 18px; font-weight: 600; }
 .spinner.sm { width: 20px; height: 20px; border-width: 2.5px; margin: 0; flex: none; }
+
+/* Khmer / English switch (../lang.js): the active flag is bright. */
+.lang-btn { flex: none; display: inline-flex; align-items: center; gap: 4px; height: 40px; padding: 0 9px; border-radius: 20px; border: 0; background: rgba(255,255,255,.15); cursor: pointer; }
+.lang-btn img { width: 22px; height: 15px; border-radius: 3px; object-fit: cover; opacity: .4; filter: grayscale(.7); transition: opacity .12s, filter .12s; }
+.lang-btn img.on { opacity: 1; filter: none; box-shadow: 0 0 0 1.5px #fff; }
+.lang-btn:focus-visible { outline: 3px solid var(--brand-2); outline-offset: 2px; }

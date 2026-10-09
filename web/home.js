@@ -17,6 +17,7 @@
   const TOKEN_KEY = 'fr_id_token';      // shared with every app on this site: sign in once
   const CACHE_KEY = 'home_c_';
   const $ = s => document.querySelector(s);
+  const t = (km, en) => window.LANG ? LANG.t(km, en) : km;
   const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const get = k => { try { return localStorage.getItem(k); } catch (e) { return null; } };
   const set = (k, v) => { try { v === null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch (e) { /* private mode */ } };
@@ -43,7 +44,7 @@
         body: JSON.stringify({ action, token: get(TOKEN_KEY), payload: {} }) });
       data = await res.json();
     } catch (e) {
-      throw Object.assign(new Error('មិនអាចភ្ជាប់អ៊ីនធឺណិត / No connection. Please try again.'), { code: 'NET' });
+      throw Object.assign(new Error(t('មិនអាចភ្ជាប់អ៊ីនធឺណិត។ សូមព្យាយាមម្តងទៀត។', 'No connection. Please try again.')), { code: 'NET' });
     }
     if (!data.ok) {
       const code = (String(data.error).match(/^(AUTH|NOACCESS):/) || [])[1] || '';
@@ -53,32 +54,35 @@
   }
 
   // ---------- Screens ----------
+  let screen = null;   // redraws the current screen when the language changes
   function renderMenu(d) {
+    screen = () => renderMenu(d);
     $('#outBtn').hidden = false;
     const name = (d.user && d.user.name) || email();
     $('#who').textContent = name;
     const mine = APPS.filter(a => d.apps.indexOf(a.key) >= 0);
     $('#view').innerHTML = mine.length ? `
-      <p class="hello">សួស្តី <b>${esc(name)}</b> · ជ្រើសរើសកម្មវិធី / Choose an app</p>
+      <p class="hello">${t('សួស្តី', 'Hello')} <b>${esc(name)}</b> · ${t('ជ្រើសរើសកម្មវិធី', 'Choose an app')}</p>
       <div class="grid">${mine.map(a => {
         const inner = `<span class="ico"><img src="icons/${esc(a.key)}.svg" alt="" width="53" height="53"></span>
-          <span class="t">${esc(a.kh)}</span>
-          ${a.url ? '' : '<span class="badge">មកដល់ឆាប់ៗ</span>'}`;
+          <span class="t">${esc(t(a.kh, a.en))}</span>
+          ${a.url ? '' : `<span class="badge">${t('មកដល់ឆាប់ៗ', 'Coming soon')}</span>`}`;
         return a.url ? `<a class="tile" href="${esc(a.url)}">${inner}</a>`
-          : `<button type="button" class="tile soon" data-soon="${esc(a.kh)}">${inner}</button>`;
+          : `<button type="button" class="tile soon" data-soon="${esc(t(a.kh, a.en))}">${inner}</button>`;
       }).join('')}</div>` : `
-      <div class="card"><div class="big">🗂️</div><h2>មិនទាន់មានកម្មវិធី<small>No apps yet</small></h2>
-        <p>សូមស្នើអ្នកគ្រប់គ្រងឲ្យធីកកម្មវិធីសម្រាប់អ្នក។<br>Ask the admin to tick your apps in the Users sheet.</p>
-        <button class="btn" id="retry">ព្យាយាមម្តងទៀត / Try again</button></div>`;
-    document.querySelectorAll('[data-soon]').forEach(b => b.onclick = () => toast(b.dataset.soon + ' · មកដល់ឆាប់ៗ / Coming soon'));
+      <div class="card"><div class="big">🗂️</div><h2>${t('មិនទាន់មានកម្មវិធី', 'No apps yet')}</h2>
+        <p>${t('សូមស្នើអ្នកគ្រប់គ្រងឲ្យធីកកម្មវិធីសម្រាប់អ្នក។', 'Ask the admin to tick your apps in the Users sheet.')}</p>
+        <button class="btn" id="retry">${t('ព្យាយាមម្តងទៀត', 'Try again')}</button></div>`;
+    document.querySelectorAll('[data-soon]').forEach(b => b.onclick = () => toast(b.dataset.soon + ' · ' + t('មកដល់ឆាប់ៗ', 'Coming soon')));
     if ($('#retry')) $('#retry').onclick = load;
   }
 
   function renderError(e, canRequest) {
+    screen = () => renderError(e, canRequest);
     $('#view').innerHTML = `<div class="card"><div class="big">${canRequest ? '🔒' : '⚠️'}</div>
       <div class="alert bad">${esc(e.message)}</div>
-      <p><button class="btn" id="retry">ព្យាយាមម្តងទៀត / Try again</button><button class="btn" id="out2">ចាកចេញ / Sign out</button></p>
-      ${canRequest ? '<p id="reqBox"><button class="btn ok" id="req">📨 ស្នើសុំទៅអ្នកគ្រប់គ្រង / Request to Admin</button></p>' : ''}</div>`;
+      <p><button class="btn" id="retry">${t('ព្យាយាមម្តងទៀត', 'Try again')}</button><button class="btn" id="out2">${t('ចាកចេញ', 'Sign out')}</button></p>
+      ${canRequest ? `<p id="reqBox"><button class="btn ok" id="req">📨 ${t('ស្នើសុំទៅអ្នកគ្រប់គ្រង', 'Request to Admin')}</button></p>` : ''}</div>`;
     $('#retry').onclick = load;
     $('#out2').onclick = signOut;
     if ($('#req')) $('#req').onclick = requestAccess;
@@ -86,14 +90,14 @@
 
   async function requestAccess() {
     const btn = $('#req');
-    btn.disabled = true; btn.textContent = 'កំពុងផ្ញើ… / Sending…';
+    btn.disabled = true; btn.textContent = t('កំពុងផ្ញើ…', 'Sending…');
     try {
       const r = await api('requestAccess');
       $('#reqBox').innerHTML = r.status === 'active'
-        ? '<div class="alert ok">គណនីរបស់អ្នកបានអនុញ្ញាតហើយ។ ចុច Try again។<br>Your account is already allowed. Tap Try again.</div>'
-        : '<div class="alert ok">✅ សំណើបានផ្ញើទៅអ្នកគ្រប់គ្រង។ សូមរង់ចាំការអនុញ្ញាត រួចចុច Try again។<br>Request sent to the admin. Once they allow you, tap Try again.</div>';
+        ? `<div class="alert ok">${t('គណនីរបស់អ្នកបានអនុញ្ញាតហើយ។ ចុច ព្យាយាមម្តងទៀត។', 'Your account is already allowed. Tap Try again.')}</div>`
+        : `<div class="alert ok">✅ ${t('សំណើបានផ្ញើទៅអ្នកគ្រប់គ្រង។ សូមរង់ចាំការអនុញ្ញាត រួចចុច ព្យាយាមម្តងទៀត។', 'Request sent to the admin. Once they allow you, tap Try again.')}</div>`;
     } catch (e) {
-      btn.disabled = false; btn.textContent = '📨 ស្នើសុំទៅអ្នកគ្រប់គ្រង / Request to Admin';
+      btn.disabled = false; btn.textContent = '📨 ' + t('ស្នើសុំទៅអ្នកគ្រប់គ្រង', 'Request to Admin');
       toast(e.message);
     }
   }
@@ -109,11 +113,12 @@
   }
 
   function renderLogin() {
+    screen = renderLogin;
     $('#outBtn').hidden = true;
     $('#who').textContent = '';
     $('#view').innerHTML = `<div class="card"><div class="big">👋</div>
-      <h2>សូមស្វាគមន៍<small>Welcome</small></h2>
-      <p>ចូលដោយគណនី Google របស់អ្នក<br>Sign in with your Google account</p>
+      <h2>${t('សូមស្វាគមន៍', 'Welcome')}</h2>
+      <p>${t('ចូលដោយគណនី Google របស់អ្នក', 'Sign in with your Google account')}</p>
       <div id="gsiButton"><div class="spinner" style="margin:4px auto"></div></div></div>`;
     if (!CFG.GOOGLE_CLIENT_ID) { $('#gsiButton').innerHTML = '<div class="alert bad">GOOGLE_CLIENT_ID is missing in config.js</div>'; return; }
     loadGsi().then(() => {
@@ -122,7 +127,7 @@
         callback: resp => { set(TOKEN_KEY, resp.credential); load(); },
       });
       $('#gsiButton').innerHTML = '';
-      google.accounts.id.renderButton($('#gsiButton'), { theme: 'filled_blue', size: 'large', shape: 'pill', text: 'signin_with' });
+      google.accounts.id.renderButton($('#gsiButton'), { theme: 'filled_blue', size: 'large', shape: 'pill', text: 'signin_with', locale: t('km', 'en') });
       google.accounts.id.prompt();
     }).catch(e => { $('#gsiButton').innerHTML = `<div class="alert bad">${esc(e.message)}</div>`; });
   }
@@ -173,6 +178,15 @@
     paintTheme();
   };
   $('#outBtn').onclick = signOut;
+  if (window.LANG) {
+    LANG.button($('#langBtn'));
+    LANG.onChange(() => { paintLabels(); if (screen) screen(); });
+  }
+  function paintLabels() {
+    $('#themeBtn').title = t('ពន្លឺ / ងងឹត', 'Light / Dark');
+    $('#outBtn').title = t('ចាកចេញ', 'Sign out');
+  }
+  paintLabels();
   paintTheme();
   // Coming back to the menu (phone back button) shows any change made by the admin.
   window.addEventListener('pageshow', e => { if (e.persisted) load(); });

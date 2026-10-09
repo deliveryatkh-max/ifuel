@@ -15,37 +15,39 @@
 <body>
   <div class="head">
     <header class="topbar">
-      <div class="brand"><span class="logo">⛽</span><div><b>ចាក់សាំង</b><small>Fuel Refill</small></div></div>
+      <div class="brand"><span class="logo">⛽</span><div><b id="brandName">ចាក់សាំង</b></div></div>
       <div class="top-right">
         <div class="who" id="who"></div>
-        <button type="button" id="themeBtn" class="theme-btn" aria-label="ប្តូរពន្លឺ / Light or dark mode" title="Light / Dark">🌙</button>
+        <button type="button" id="langBtn" class="lang-btn"></button>
+        <button type="button" id="themeBtn" class="theme-btn" aria-label="Light / Dark" title="Light / Dark">🌙</button>
       </div>
     </header>
     <nav class="navbar" id="navbar" hidden>
-      <button type="button" id="navBack" class="nav-btn" aria-label="ថយក្រោយ / Back"><svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M15 5l-7 7 7 7" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg><span>ថយក្រោយ<small>Back</small></span></button>
+      <button type="button" id="navBack" class="nav-btn" aria-label="ថយក្រោយ"><svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M15 5l-7 7 7 7" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg><span>ថយក្រោយ</span></button>
       <div class="nav-title" id="navTitle"></div>
-      <button type="button" id="navFwd" class="nav-btn fwd" aria-label="ទៅមុខ / Forward"><span>ទៅមុខ<small>Forward</small></span><svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M9 5l7 7-7 7" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+      <button type="button" id="navFwd" class="nav-btn fwd" aria-label="ទៅមុខ"><span>ទៅមុខ</span><svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M9 5l7 7-7 7" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
     </nav>
   </div>
 
-  <div id="demoBanner" class="demo-banner" hidden>DEMO · ទិន្នន័យមិនត្រូវបានរក្សាទុកទេ / Nothing is saved</div>
+  <div id="demoBanner" class="demo-banner" hidden>DEMO · ទិន្នន័យមិនត្រូវបានរក្សាទុកទេ</div>
 
   <main id="view"></main>
 
   <nav class="tabs" id="tabs" hidden>
-    <a href="../" class="tab home-tab"><span><img src="../icons/home.svg" alt="" width="24" height="24"></span>ទំព័រដើម<small>Home</small></a>
-    <button data-tab="new" class="tab"><span>➕</span>បញ្ចូលថ្មី<small>New</small></button>
-    <button data-tab="mine" class="tab"><span>📋</span>របស់ខ្ញុំ<small>My entries</small></button>
-    <button data-tab="review" class="tab" id="reviewTab" hidden><span>✅</span>អ្នកត្រួតពិនិត្យ<small>Reviewer</small></button>
+    <a href="../" class="tab home-tab"><span><img src="../icons/home.svg" alt="" width="24" height="24"></span><b class="lb">ទំព័រដើម</b></a>
+    <button data-tab="new" class="tab"><span>➕</span><b class="lb">បញ្ចូលថ្មី</b></button>
+    <button data-tab="mine" class="tab"><span>📋</span><b class="lb">របស់ខ្ញុំ</b></button>
+    <button data-tab="review" class="tab" id="reviewTab" hidden><span>✅</span><b class="lb">អ្នកត្រួតពិនិត្យ</b></button>
   </nav>
 
   <nav class="tabs" id="homeOnly">
-    <a href="../" class="tab home-tab"><span><img src="../icons/home.svg" alt="" width="24" height="24"></span>ទំព័រដើម<small>Home</small></a>
+    <a href="../" class="tab home-tab"><span><img src="../icons/home.svg" alt="" width="24" height="24"></span><b class="lb">ទំព័រដើម</b></a>
   </nav>
 
   <div id="toast" class="toast" hidden></div>
 
   <script src="../config.js"></script>
+  <script src="../lang.js"></script>
   <script>if (!(window.APP_CONFIG || {}).API_URL) document.write('<script src="demo-data.js"><\/script>');</script>
   <script src="app.js"></script>
 </body>
