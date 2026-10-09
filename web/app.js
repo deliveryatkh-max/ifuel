@@ -413,12 +413,31 @@
     } catch (e) {
       if (!state.token && !DEMO) return;   // signOut already re-rendered the login
       $('#view').innerHTML = `<div class="login"><div class="big">🚫</div><div class="alert bad">${esc(e.message)}</div>
-        <p><button class="btn" id="retry">ព្យាយាមម្តងទៀត / Try again</button> <button class="btn" id="out">ចាកចេញ / Sign out</button></p></div>`;
+        <p><button class="btn" id="retry">ព្យាយាមម្តងទៀត / Try again</button> <button class="btn" id="out">ចាកចេញ / Sign out</button></p>
+        ${e.code === 'NOACCESS' ? '<p id="reqBox"><button class="btn ok" id="req">📨 ស្នើសុំទៅអ្នកគ្រប់គ្រង / Request to Admin</button></p>' : ''}</div>`;
       $('#retry').onclick = start; $('#out').onclick = () => signOut(false);
+      if ($('#req')) $('#req').onclick = requestAccess;
       return;
     }
     local.set('config', state.config);
     enterApp();
+  }
+
+  // Asks the admin to add this Google account: the server adds it to the Users sheet as not active yet and tells the Telegram group.
+  async function requestAccess() {
+    const btn = $('#req');
+    btn.disabled = true;
+    btn.textContent = 'កំពុងផ្ញើ… / Sending…';
+    try {
+      const r = await api('requestAccess');
+      $('#reqBox').innerHTML = r.status === 'active'
+        ? '<div class="alert ok">គណនីរបស់អ្នកបានអនុញ្ញាតហើយ។ ចុច Try again។<br>Your account is already allowed. Tap Try again.</div>'
+        : '<div class="alert ok">✅ សំណើបានផ្ញើទៅអ្នកគ្រប់គ្រង។ សូមរង់ចាំការអនុញ្ញាត រួចចុច Try again។<br>Request sent to the admin. Once they allow you, tap Try again.</div>';
+    } catch (e) {
+      btn.disabled = false;
+      btn.textContent = '📨 ស្នើសុំទៅអ្នកគ្រប់គ្រង / Request to Admin';
+      $('#reqBox').insertAdjacentHTML('beforeend', `<div class="alert bad">${esc(e.message)}</div>`);
+    }
   }
 
   function showRole() {
