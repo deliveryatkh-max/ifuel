@@ -13,7 +13,7 @@
   const set = (k, v) => { try { v == null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch (e) { /* private mode */ } };
   const getJ = (k, d) => { try { return JSON.parse(get(k)) || d; } catch (e) { return d; } };
 
-  const K = { cfg: 'ot_cfg', id: 'ot_last_id', mine: 'ot_mine', items: 'ot_items', draft: 'ot_draft', people: 'ot_people' };
+  const K = { dept: 'ot_dept', cfg: 'ot_cfg', id: 'ot_last_id', mine: 'ot_mine', items: 'ot_items', draft: 'ot_draft', people: 'ot_people' };
 
   // ---------- server ----------
   const ERR_KM = {
@@ -24,6 +24,7 @@
     LIMIT: 'សំណើច្រើនពេកសម្រាប់លេខកាតនេះ។ សូមរង់ចាំបន្តិច។',
     SAVE: 'មិនអាចរក្សាទុកសំណើបានទេ។ សូមព្យាយាមម្តងទៀត។',
     GPS: 'អ្នកត្រូវនៅជិតកន្លែងធ្វើការរបស់អ្នក។',
+    BAD_QR: 'QR Code នេះមិនត្រឹមត្រូវទេ។ សូមស្កេន QR Code របស់ផ្នែកអ្នកម្តងទៀត។',
   };
   function niceError(e) {
     const code = e.code || '';
@@ -55,6 +56,7 @@
   const h12 = s => { const m = toMin(s); if (m == null) return ''; const h = Math.floor(m / 60); return ((h % 12) || 12) + ':' + pad(m % 60) + (h < 12 ? ' AM' : ' PM'); };
   const fmtDate = ymd => { if (!ymd) return ''; const d = new Date(ymd + 'T00:00:00'); return d.toLocaleDateString(LANG.get() === 'en' ? 'en-GB' : 'km-KH', { day: 'numeric', month: 'short', year: 'numeric' }); };
   const uuid = () => (crypto.randomUUID ? crypto.randomUUID() : 'k' + Date.now().toString(36) + Math.random().toString(36).slice(2, 12));
+  const addDays = (ymd, n) => { const d = new Date(ymd + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
   const hoursText = h => (Math.round(h * 100) / 100).toString();
 
   function calc(start, end, allowOvernight) {
@@ -79,7 +81,8 @@
 
   // ---------- state ----------
   let cfg = getJ(K.cfg, null);
-  const state = { tab: 'new', emp: null, lookingUp: false, lookupErr: '', draft: getJ(K.draft, {}), sending: false, sendErr: '', result: null };
+  const state0 = getJ(K.draft, {}); delete state0.date;   // the form always opens on today's date
+  const state = { dept: null, deptErr: '', deptChecking: false, tab: 'new', emp: null, lookingUp: false, lookupErr: '', draft: state0, sending: false, sendErr: '', result: null };
   let redraw = () => {};
 
   async function loadConfig() {
@@ -91,8 +94,10 @@
         set(K.people, JSON.stringify({ at: Date.now(), list: state.people }));
       }
       cfg = c; set(K.cfg, JSON.stringify(c));
-      if (state.tab === 'new' && !state.result) renderNew(true);
-    } catch (e) { if (!cfg) cfg = { reasons: [], overnight: true, needGps: false }; }
+      if (state.tab === 'new' && !state.result && !scanner.on) renderNew(true);
+    } catch (e) {
+      if (!cfg) { cfg = { reasons: [], overnight: true, needGps: false }; if (state.tab === 'new' && !state.result) renderNew(true); }
+    }
   }
 
   function saveDraft() {
@@ -105,6 +110,8 @@
     state.tab = 'new'; paintTabs();
     redraw = () => renderNew(true);
     if (state.result) return renderDone();
+    if (!cfg) { $('#view').innerHTML = '<div class="spinner" aria-label="Loading"></div>'; return; }
+    if (cfg.needDept && !deptOk()) return renderGate();
     const c = cfg || { reasons: [], overnight: true };
     const d = state.draft;
     if (!d.date) d.date = c.today || localYmd();
@@ -115,6 +122,7 @@
 
     $('#view').innerHTML = `
       <form id="form" novalidate autocomplete="off">
+        ${c.needDept && state.dept ? `<div class="deptbar">🏢 <span>${t('ផ្នែក', 'Department')}: <b>${esc(state.dept.name)}</b></span><button type="button" class="link" id="rescan">${t('ស្កេនម្តងទៀត', 'Scan again')}</button></div>` : ''}
         <section class="card">
           <h2><span class="n">1</span>${t('បុគ្គលិក', 'Employee')}</h2>
           <label class="f" for="empId">${t('លេខកាត ឬឈ្មោះបុគ្គលិក', 'Employee ID or name')} <span class="req">*</span></label>
@@ -140,7 +148,7 @@
           <h2><span class="n">2</span>${t('ព័ត៌មានថែមម៉ោង', 'OT details')}</h2>
           <div class="field">
             <label class="f" for="otDate">${t('ថ្ងៃធ្វើថែមម៉ោង', 'OT date')} <span class="req">*</span></label>
-            <input class="in" type="date" id="otDate" value="${esc(d.date)}" required>
+            <input class="in" type="date" id="otDate" value="${esc(d.date)}" ${c.today && c.maxPast != null ? `min="${addDays(c.today, -c.maxPast)}"` : ''} ${c.today && c.maxFuture != null ? `max="${addDays(c.today, c.maxFuture)}"` : ''} required>
             <div class="dayinfo" id="dayInfo" aria-live="polite">${dayHtml(d.date)}</div>
           </div>
           <div class="field row2">
@@ -195,6 +203,7 @@
     $('#sugg').addEventListener('mousedown', e => e.preventDefault());   // keep focus so the tap lands
     $('#sugg').addEventListener('click', e => { const o = e.target.closest('.opt'); if (o) pick(o.dataset.id); });
     $('#findBtn').onclick = () => find(null);
+    if ($('#rescan')) $('#rescan').onclick = () => { setDept(null); renderNew(); };
     $('#form').addEventListener('click', e => { if (!e.target.closest('.idrow')) hideSugg(); });
 
     const onTime = () => {
@@ -216,6 +225,107 @@
     $('#form').onsubmit = e => { e.preventDefault(); submit(); };
   }
   function placeCaret() { const el = $('#empId'); if (el) { const n = el.value.length; try { el.setSelectionRange(n, n); } catch (e) { /* number input */ } } }
+
+  // ---------- department QR (scanned before the form opens) ----------
+  // The printed QR holds the form link with the department code (…/overtime/?d=D-XXXXXX). It can be scanned
+  // here, or opened with the phone camera. The server checks the code on every submission too.
+  const DEPT_HOURS = 2;
+  function deptOk() {
+    if (!state.dept) state.dept = getJ(K.dept, null);
+    if (state.dept && Date.now() - (state.dept.at || 0) > DEPT_HOURS * 3600000) setDept(null);
+    return !!state.dept;
+  }
+  function setDept(d) { state.dept = d; set(K.dept, d ? JSON.stringify(d) : null); }
+  async function checkDept(text) {
+    state.deptChecking = true; state.deptErr = ''; if (state.tab === 'new') renderNew();
+    try {
+      const d = await api('dept', { code: String(text || '').slice(0, 300) });
+      setDept({ code: d.code, name: d.name, at: Date.now() });
+      toast('✅ ' + d.name);
+    } catch (e) {
+      setDept(null);
+      state.deptErr = e.code === 'BAD_QR' || e.code === '' ? t(ERR_KM.BAD_QR, 'Wrong QR code. Please scan your department QR code again.') : niceError(e);
+    } finally {
+      state.deptChecking = false;
+      if (state.tab === 'new' && !state.result) renderNew();
+    }
+  }
+  function renderGate() {
+    $('#view').innerHTML = `
+      <section class="card gate">
+        <div class="gate-ic" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="56" height="56" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M3 8V5a2 2 0 0 1 2-2h3M16 3h3a2 2 0 0 1 2 2v3M21 16v3a2 2 0 0 1-2 2h-3M8 21H5a2 2 0 0 1-2-2v-3"/><rect x="7" y="7" width="4" height="4" rx=".5"/><rect x="13" y="7" width="4" height="4" rx=".5"/><rect x="7" y="13" width="4" height="4" rx=".5"/><path d="M13 13h1.5v1.5M17 13v4h-4"/></svg>
+        </div>
+        <h2>${t('ស្កេន QR Code របស់ផ្នែក', 'Scan your department QR code')}</h2>
+        <p class="hint center">${t('សូមស្កេន QR Code ដែលបិទនៅផ្នែករបស់អ្នក ដើម្បីបើកទម្រង់ស្នើថែមម៉ោង។', 'Scan the QR code posted in your department to open the OT request form.')}</p>
+        ${state.deptErr ? `<div class="alert bad" role="alert">❌ ${esc(state.deptErr)}</div>` : ''}
+        <div class="qr-view" id="qrView" hidden><video playsinline muted></video><div class="qr-frame"></div></div>
+        <p class="hint center" id="qrMsg" hidden></p>
+        <button type="button" class="btn ok big" id="scanBtn" ${state.deptChecking ? 'disabled' : ''}>${state.deptChecking ? `<span class="sp"></span> ${t('កំពុងពិនិត្យ…', 'Checking…')}` : `📷 ${t('ស្កេន QR Code', 'Scan QR code')}`}</button>
+        <label class="btn photo" id="photoBtn"><input type="file" accept="image/*" capture="environment" hidden>🖼️ ${t('ថតរូប QR ជំនួសវិញ', 'Take a photo of the QR instead')}</label>
+      </section>`;
+    $('#scanBtn').onclick = () => (scanner.on ? scanner.stop() : startScan());
+    $('#photoBtn input').onchange = e => {
+      const file = e.target.files && e.target.files[0];
+      if (!file) return;
+      const img = new Image();
+      img.onload = async () => {
+        const text = await decodeQr(img).catch(() => '');
+        URL.revokeObjectURL(img.src);
+        if (text) checkDept(text);
+        else { state.deptErr = t('រកមិនឃើញ QR Code ក្នុងរូបទេ។ សូមថតម្តងទៀត។', 'No QR code found in the photo. Please try again.'); renderNew(); }
+      };
+      img.src = URL.createObjectURL(file);
+    };
+  }
+  let qrLib = null;
+  function loadQrLib() {
+    return qrLib || (qrLib = new Promise((resolve, reject) => {
+      const s = document.createElement('script');
+      s.src = '../vendor/jsQR.min.js'; s.onload = () => resolve(window.jsQR); s.onerror = () => { qrLib = null; reject(new Error('QR reader did not load')); };
+      document.head.appendChild(s);
+    }));
+  }
+  const qrCanvas = document.createElement('canvas');
+  async function decodeQr(src) {
+    const w = src.videoWidth || src.naturalWidth || src.width, h = src.videoHeight || src.naturalHeight || src.height;
+    if (!w || !h) return '';
+    if ('BarcodeDetector' in window) {
+      try { const r = await new window.BarcodeDetector({ formats: ['qr_code'] }).detect(src); if (r[0]) return r[0].rawValue; } catch (e) { /* fall back to jsQR */ }
+    }
+    const jsQR = await loadQrLib();
+    const scale = Math.min(1, 720 / Math.max(w, h));
+    qrCanvas.width = Math.round(w * scale); qrCanvas.height = Math.round(h * scale);
+    const ctx = qrCanvas.getContext('2d', { willReadFrequently: true });
+    ctx.drawImage(src, 0, 0, qrCanvas.width, qrCanvas.height);
+    const img = ctx.getImageData(0, 0, qrCanvas.width, qrCanvas.height);
+    const code = jsQR(img.data, img.width, img.height, { inversionAttempts: 'attemptBoth' });
+    return code ? code.data : '';
+  }
+  const scanner = { on: false, stream: null, timer: 0, stop() { this.on = false; clearTimeout(this.timer); if (this.stream) this.stream.getTracks().forEach(x => x.stop()); this.stream = null; } };
+  async function startScan() {
+    state.deptErr = ''; renderGate();
+    const view = $('#qrView'), video = $('#qrView video'), msg = $('#qrMsg');
+    view.hidden = false; msg.hidden = false; msg.textContent = t('ដាក់ QR ក្នុងប្រអប់', 'Hold the QR code inside the square');
+    $('#scanBtn').textContent = '✖ ' + t('បិទកាមេរ៉ា', 'Close camera');
+    scanner.on = true;
+    try {
+      scanner.stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false });
+      if (!scanner.on) { scanner.stop(); return; }
+      video.srcObject = scanner.stream; await video.play();
+      const tick = async () => {
+        if (!scanner.on) return;
+        const text = await decodeQr(video).catch(() => '');
+        if (text) { scanner.stop(); checkDept(text); } else scanner.timer = setTimeout(tick, 180);
+      };
+      tick();
+    } catch (e) {
+      scanner.stop();
+      view.hidden = true;
+      msg.textContent = t('មិនអាចបើកកាមេរ៉ាបានទេ។ សូមអនុញ្ញាតកាមេរ៉ា ឬថតរូប QR ខាងក្រោម។', 'Cannot open the camera. Allow the camera, or take a photo of the QR below.');
+      $('#scanBtn').innerHTML = '📷 ' + t('ស្កេន QR Code', 'Scan QR code');
+    }
+  }
 
   // ---------- employee search (ID, English or Khmer name) ----------
   const people = () => (state.people || []);
@@ -327,6 +437,9 @@
     const problems = [];
     if (!state.emp || state.emp.id !== idNow) problems.push(t('សូមស្វែងរកលេខកាតបុគ្គលិករបស់អ្នកជាមុន។', 'Please find your Employee ID first.'));
     if (!d.date) problems.push(t('សូមជ្រើសរើសថ្ងៃ។', 'Please choose the OT date.'));
+    const today = c.today || localYmd();
+    if (d.date && c.maxPast != null && d.date < addDays(today, -c.maxPast)) problems.push(t('អាចស្នើថ្ងៃថយក្រោយបានត្រឹមតែ ' + c.maxPast + ' ថ្ងៃប៉ុណ្ណោះ។', 'The OT date can be at most ' + c.maxPast + ' days back.'));
+    if (d.date && c.maxFuture != null && d.date > addDays(today, c.maxFuture)) problems.push(t('ថ្ងៃនេះឆ្ងាយពេកទៅមុខ។', 'The OT date is too far ahead.'));
     if (!d.start || !d.end) problems.push(t('សូមបញ្ចូលម៉ោងចាប់ផ្តើម និងម៉ោងបញ្ចប់។', 'Please enter the start and end time.'));
     const cc = calc(d.start, d.end, c.overnight !== false);
     if (cc && cc.err) problems.push(cc.err);
@@ -336,14 +449,21 @@
 
     state.sending = true; state.sendErr = ''; renderNew(true);
     try {
-      const payload = { key: d.key, id: state.emp.id, date: d.date, start: d.start, end: d.end, reason: String(d.reason).trim() };
+      const payload = { key: d.key, id: state.emp.id, date: d.date, start: d.start, end: d.end, reason: String(d.reason).trim(), dept: state.dept ? state.dept.code : '' };
       if (c.needGps) Object.assign(payload, await getGps());
       const r = await api('submit', payload);
       remember(state.emp.id, r.reqId);
+      // A new reason typed under Other is added to the sheet's list by the server; show it here at once too.
+      if (d.pick === '__other' && cfg && cfg.reasons) {
+        const nr = String(d.reason).trim(), k = x => x.replace(/[.…\s]+$/, '').trim().toLowerCase();
+        if (!cfg.reasons.some(x => k(x) === k(nr))) { cfg.reasons = cfg.reasons.concat(nr).sort((x, y) => x.localeCompare(y)); set(K.cfg, JSON.stringify(cfg)); }
+      }
       state.result = Object.assign({ hours: cc.hours, date: d.date, start: d.start, end: d.end, emp: state.emp }, r);
-      state.draft = { date: d.date };   // a fresh key for the next request
+      state.draft = {};                   // a fresh key, and today's date, for the next request
       saveDraft();
+      setDept(null);                      // the next request needs a new scan
     } catch (e) {
+      if (e.code === 'BAD_QR') { setDept(null); state.deptErr = niceError(e); state.sending = false; renderNew(); return; }
       // The same key is kept, so trying again can never save the request twice.
       state.sendErr = niceError(e);
     } finally {
@@ -386,6 +506,7 @@
 
   // ---------- My requests ----------
   async function renderMine() {
+    scanner.stop();
     state.tab = 'mine'; paintTabs();
     redraw = () => draw(getJ(K.items, []), false);
     const mine = getJ(K.mine, []);
@@ -481,8 +602,9 @@
     };
     const db = getJ('ot_demo_db', {});
     return wait(350).then(() => {
-      if (action === 'config') return { reasons: ['ធ្វើការថ្ងៃបុណ្យ...', 'រៀបចំទំនិញសម្រាប់ដឹកជញ្ជូន...'], overnight: true, needGps: false, maxHours: null, today: localYmd(),
+      if (action === 'config') return { needDept: true, reasons: ['ធ្វើការថ្ងៃបុណ្យ...', 'រៀបចំទំនិញសម្រាប់ដឹកជញ្ជូន...'], overnight: true, needGps: false, maxHours: null, maxPast: 7, today: localYmd(),
         holidays: [{ date: '2026-10-10', en: 'Phcum Ben Festival', kh: 'ពិធីបុណ្យភ្ជុំបិណ្ឌ' }, { date: '2026-10-15', en: "Commemoration Day of King's Father", kh: 'ទិវាប្រារព្ធពិធីគោរពព្រះវិញ្ញាណក្ខន្ធ ព្រះករុណា ព្រះបាទសម្តេចព្រះ នរោត្តម សីហនុ' }], list: p.withEmployees ? Object.values(EMP) : undefined };
+      if (action === 'dept') { const c = String(p.code || '').replace(/^.*[?&]d=/, '').toUpperCase(); if (c !== 'D-DEMO01') throw Object.assign(new Error('Wrong QR code.'), { code: 'BAD_QR' }); return { code: c, name: 'Warehouse (demo)' }; }
       if (action === 'employees') return { list: Object.values(EMP) };
       if (action === 'lookup') { const e = EMP[p.id]; if (!e) throw Object.assign(new Error('Employee ID not found.'), { code: 'NOTFOUND' }); return e; }
       if (action === 'submit') {
@@ -501,7 +623,11 @@
   }
 
   // ---------- start ----------
+  // Opened from the printed QR with the phone camera: check that code, then tidy the address bar.
+  const urlDept = new URLSearchParams(location.search).get('d');
+  if (urlDept) { try { history.replaceState(null, '', location.pathname); } catch (e) { /* old phone */ } }
   renderNew();
+  if (urlDept) checkDept(urlDept);
   loadConfig();
   loadPeople();
   if (get(K.id) && !state.emp) pick(get(K.id));

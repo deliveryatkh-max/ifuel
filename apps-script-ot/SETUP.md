@@ -168,6 +168,32 @@ Every employee is mapped to Kim today, so test messages go only to Kim:
 
 ---
 
+## 11. Department QR codes (scan before the form opens)
+
+The form now opens on a "Scan your department QR code" screen. The other fields appear only after a valid department QR is scanned. A wrong QR shows a red "wrong QR code" message.
+
+1. Open the **OT Departments** tab. `setup()` creates it with one starter row, "OT Department". If you don't see it, run **makeDepartmentQR** once.
+2. Type your department names in column **A**, one per row. You can rename the starter row.
+3. Run **makeDepartmentQR** from the editor. Each named row gets:
+   - a unique **Department ID** (for example D-7K3QX9)
+   - its **QR Link**
+   - a **Print QR** link
+   - a **QR Code** picture
+   Existing IDs never change, so posters you've already printed keep working.
+4. Open a row's **Print QR** link and press Print. You get an A4 poster with the department name and the QR. Post it in that department.
+5. To turn a code off, set **Active** to No. If a printed QR is lost or copied, delete its Department ID and run makeDepartmentQR again: that row gets a new ID, and you print a new poster.
+
+How it works:
+- Staff scan the poster from inside the form (📷 Scan QR code), or with the phone's normal camera, which opens the form directly.
+- A scan lasts 2 hours, or until the request is sent. Each new request needs a new scan.
+- The server checks the code again on every submission, so a request cannot be saved without a valid code.
+- The department name is saved in the new **Department** column of OT Data and appears in the Telegram message.
+- If the OT Departments tab has no IDs at all, the form opens without a scan.
+
+## 12. Other rules (10 Oct 2026)
+- **New reasons:** a reason typed under "Other" is added to the **OT Reason** sheet, which is then sorted A–Z, so the next person can pick it from the list. The same reason typed again in a different case, or with a trailing dot, is not added twice.
+- **Date:** the form always starts on today's date. Back-dating is allowed for up to 7 days (OT App Settings → MAX_DAYS_IN_PAST, default 7). The form and the server both enforce this.
+
 ## User guide: employees
 
 1. Open **isteel-app.pages.dev/overtime/**, or tap ថែមម៉ោង on the home menu.
