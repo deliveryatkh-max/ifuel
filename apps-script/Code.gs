@@ -384,7 +384,7 @@ function submitRefill_(p, user) {
       keys.slice(0, Math.max(0, keys.length - 300)).forEach(k => delete refs[k]);   // keep the last 300
       PropertiesService.getScriptProperties().setProperty('SUBMIT_REFS', JSON.stringify(refs));
     }
-    if (telegramReady_()) {
+    if (telegramReady_() || alertsReady_()) {
       tgPost = { id: id, type: clean.type, plate: clean.plate, driver: clean.driver, km: clean.km, hour: clean.hour,
         litres: clean.litres, dateTime: now.getTime(), note: clean.note,
         odoPhoto: p.odoPhoto, hourPhoto: p.hourPhoto, pumpPhoto: p.pumpPhoto };
@@ -395,7 +395,7 @@ function submitRefill_(p, user) {
     // Posted straight away (a few seconds), using the photos already in hand. Google's timed triggers can
     // take minutes to run, so the queue + trigger is only the fallback when Telegram fails.
     if (tgPost) {
-      try { alertUnusual_(tgPost, allRefills_(), postRefillToTelegram_(tgPost)); }
+      try { alertUnusual_(tgPost, allRefills_(), telegramReady_() ? postRefillToTelegram_(tgPost) : null); }
       catch (e) { console.error('Telegram post failed for ' + tgPost.id + ': ' + e); queueTelegram_(tgPost.id); }
     }
   }
@@ -800,7 +800,7 @@ function telegram_(method, payload) {
   if (body.ok) return body.result;
   const moved = body.parameters && body.parameters.migrate_to_chat_id;
   if (moved && payload.chat_id) {
-    setSetting_('TELEGRAM_CHAT_ID', String(moved));
+    ['TELEGRAM_CHAT_ID', 'TELEGRAM_ALERT_CHAT_ID'].forEach(k => { if (getSetting_(k) === String(payload.chat_id)) setSetting_(k, String(moved)); });
     payload.chat_id = String(moved);
     return telegram_(method, payload);
   }
@@ -833,7 +833,7 @@ function pendingChanged_() {
 }
 
 // ---------- Unusual refill alerts (Telegram) ----------
-// Sent as a reply under the new entry's post when a refill looks out of the ordinary:
+// Sent to the alerts group (TELEGRAM_ALERT_CHAT_ID, connect it with telegramConnectAlerts) when a refill looks out of the ordinary:
 //  · litres well above that truck's usual refill (1.5 × the median of its last 10, and at least 20 L more),
 //  · a second refill for the same plate on the same day,
 //  · km since the last refill above the dashboard's "Maximum km between refills" (Settings, default 2,000).
@@ -876,7 +876,7 @@ function unusualRefill_(r, rows) {
 /** Posts the alert when something is unusual. replyTo: what Telegram returned for the entry's own post. */
 function alertUnusual_(r, rows, replyTo) {
   try {
-    if (!telegramReady_() || isNo_(getSetting_('TELEGRAM_ALERTS'))) return;
+    if (!alertsReady_() || isNo_(getSetting_('TELEGRAM_ALERTS'))) return;
     const u = unusualRefill_(r, rows);
     if (u.usual === null && !u.sameDay && u.kmGap === null) return;
     const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -889,14 +889,24 @@ function alertUnusual_(r, rows, replyTo) {
     if (u.sameDay) lines.push('🔁 ចាក់លើកទី ' + (u.sameDay + 1) + ' នៅថ្ងៃនេះ / refill no. ' + (u.sameDay + 1) + ' today');
     if (u.kmGap !== null) lines.push('📏 ' + num(u.kmGap) + ' km ពីលើកមុន / since the last refill');
     lines.push('👉 Requires Investigation · <a href="' + appUrl_() + '/dashboard/">Dashboard</a>');
+    if (r.dateTime) lines.push('🕒 ' + Utilities.formatDate(new Date(r.dateTime), Session.getScriptTimeZone(), 'dd/MM/yyyy HH:mm'));
     lines.push('🆔 <code>' + esc(r.id) + '</code>');
+    const chatId = getSetting_('TELEGRAM_ALERT_CHAT_ID');
+    const payload = { chat_id: chatId, text: lines.join('\n'), parse_mode: 'HTML', disable_web_page_preview: true };
+    // Shown as a reply under the entry's post only if alerts ever go to the same group.
     const first = Array.isArray(replyTo) ? replyTo[0] : replyTo;
-    const payload = { chat_id: getSetting_('TELEGRAM_CHAT_ID'), text: lines.join('\n'), parse_mode: 'HTML', disable_web_page_preview: true };
-    if (first && first.message_id) payload.reply_parameters = JSON.stringify({ message_id: first.message_id, allow_sending_without_reply: true });
+    if (first && first.message_id && chatId === getSetting_('TELEGRAM_CHAT_ID')) {
+      payload.reply_parameters = JSON.stringify({ message_id: first.message_id, allow_sending_without_reply: true });
+    }
     telegram_('sendMessage', payload);
   } catch (e) {
     console.error('Unusual refill alert failed for ' + r.id + ': ' + e);   // never blocks the entry's own post
   }
+}
+
+/** Alerts and the recap go to their own group (TELEGRAM_ALERT_CHAT_ID, set by telegramConnectAlerts). */
+function alertsReady_() {
+  return !!(telegramToken_() && getSetting_('TELEGRAM_ALERT_CHAT_ID'));
 }
 
 function appUrl_() {
@@ -904,7 +914,7 @@ function appUrl_() {
 }
 
 // ---------- Monthly recap (Telegram) ----------
-// On the 1st of each month at about 08:00, last month's figures go to the group. The numbers come from
+// On the 1st of each month at about 08:00, last month's figures go to the alerts group (TELEGRAM_ALERT_CHAT_ID). The numbers come from
 // the dashboard's own engine (FuelEngine at the end of this file), so they match the dashboard.
 // The timer is created automatically the first time someone opens the home menu after this update.
 // Turn off by setting TELEGRAM_RECAP = No in the Settings sheet. To try it now, run telegramSendRecap.
@@ -955,15 +965,15 @@ function ensureTelegramSettings_() {
 
 /** Run by the monthly timer: sends last month's recap. */
 function sendMonthlyRecap() {
-  if (!telegramReady_() || isNo_(getSetting_('TELEGRAM_RECAP'))) return;
+  if (!alertsReady_() || isNo_(getSetting_('TELEGRAM_RECAP'))) return;
   const now = new Date();
   const recap = FuelEngine.monthlyRecap(dashboardRaw_(), now.getFullYear(), now.getMonth() - 1);
-  telegram_('sendMessage', { chat_id: getSetting_('TELEGRAM_CHAT_ID'), text: recapText_(recap), parse_mode: 'HTML', disable_web_page_preview: true });
+  telegram_('sendMessage', { chat_id: getSetting_('TELEGRAM_ALERT_CHAT_ID'), text: recapText_(recap), parse_mode: 'HTML', disable_web_page_preview: true });
 }
 
 /** Run from the editor to send last month's recap now (to try it). */
 function telegramSendRecap() {
-  if (!telegramReady_()) throw new Error('Telegram is not connected yet: run telegramConnect first.');
+  if (!alertsReady_()) throw new Error('The alerts group is not connected yet: run telegramConnectAlerts first.');
   ensureTelegramSettings_();
   sendMonthlyRecap();
 }
@@ -1077,13 +1087,43 @@ function fixDriverNames() {
  * and send /start@<bot name> in the group.
  */
 function telegramConnect() {
+  const found = telegramGroups_();
+  const chatId = found.ids[found.ids.length - 1];
+  setSetting_('TELEGRAM_CHAT_ID', chatId);
+  telegram_('sendMessage', { chat_id: chatId,
+    text: '✅ Fuel Refill App ភ្ជាប់រួចរាល់។ ការចាក់សាំងថ្មីនឹងបង្ហាញនៅទីនេះ។\nFuel Refill App is connected. New refills will be posted here.' });
+  Logger.log('Connected to "' + found.groups[chatId] + '" (' + chatId + ') as @' + found.bot.username);
+}
+
+/**
+ * Run once from the editor to send unusual-refill alerts and the monthly recap to a second group
+ * (Kim, 10 Oct 2026): add the same bot to that group, send /start@<bot> there, then run this.
+ * It picks the most recently active group that is not the new-refill group.
+ */
+function telegramConnectAlerts() {
+  const found = telegramGroups_();
+  const main = getSetting_('TELEGRAM_CHAT_ID');
+  const ids = found.ids.filter(id => id !== main);
+  if (!ids.length) {
+    throw new Error('Only the new-refill group was found. Add @' + found.bot.username + ' to the alerts group, send /start@' +
+      found.bot.username + ' in that group, then run telegramConnectAlerts again.');
+  }
+  const chatId = ids[ids.length - 1];
+  setSetting_('TELEGRAM_ALERT_CHAT_ID', chatId);
+  telegram_('sendMessage', { chat_id: chatId,
+    text: '✅ ក្រុមនេះនឹងទទួលការជូនដំណឹងចាក់ខុសធម្មតា និងសង្ខេបប្រចាំខែ។\nThis group will get unusual refill alerts and the monthly recap.' });
+  Logger.log('Alerts and recap go to "' + found.groups[chatId] + '" (' + chatId + ')');
+}
+
+/** Groups the bot has seen recently, oldest first by last activity. */
+function telegramGroups_() {
   if (!telegramToken_()) throw new Error('Add TELEGRAM_BOT_TOKEN in Project Settings → Script Properties first.');
   const bot = telegram_('getMe', {});
   let updates;
   try {
     updates = telegram_('getUpdates', { limit: '100' });
   } catch (e) {
-    if (/webhook/i.test(e.message)) throw new Error('This bot has a webhook set by another tool. Remove it first, then run telegramConnect again.');
+    if (/webhook/i.test(e.message)) throw new Error('This bot has a webhook set by another tool. Remove it first, then run this again.');
     throw e;
   }
   const groups = {};
@@ -1097,14 +1137,10 @@ function telegramConnect() {
   const ids = Object.keys(groups);
   if (!ids.length) {
     throw new Error('No group found. Add @' + bot.username + ' to the group, send /start@' + bot.username +
-      ' in the group, then run telegramConnect again.');
+      ' in the group, then run this again.');
   }
-  const chatId = ids[ids.length - 1];
   if (ids.length > 1) Logger.log('Groups seen: ' + ids.map(id => groups[id] + ' (' + id + ')').join(', '));
-  setSetting_('TELEGRAM_CHAT_ID', chatId);
-  telegram_('sendMessage', { chat_id: chatId,
-    text: '✅ Fuel Refill App ភ្ជាប់រួចរាល់។ ការចាក់សាំងថ្មីនឹងបង្ហាញនៅទីនេះ។\nFuel Refill App is connected. New refills will be posted here.' });
-  Logger.log('Connected to "' + groups[chatId] + '" (' + chatId + ') as @' + bot.username);
+  return { bot: bot, groups: groups, ids: ids };
 }
 
 /** Optional: posts the newest entry to the group so you can see what a notification looks like. */
