@@ -210,6 +210,13 @@ There are two modes. You switch between them in the sheet menu **OT App → ⏱ 
 
 The menu appears the next time the sheet is opened after you paste the new script. The first time you use it, Google asks you to authorize it once.
 
+## 14. My requests: total OT with a date filter
+
+The My requests tab shows the employee's **total OT hours** between a **From** date and a **To** date. By default the range runs from the 1st of the current month to today. Staff can change either date, and the list and totals update straight away.
+
+- The total counts every OT row for that Employee ID in OT Data, including rows from before the app, which are shown as "Earlier record". It is split into Approved, Pending and Earlier records. Rejected requests are shown but not counted.
+- **Privacy:** the summary opens only for an Employee ID that already has one of its Request IDs saved on the phone, either from sending a request or from "Check a request". Nobody can see a colleague's OT by typing their ID alone.
+
 ## User guide: employees
 
 1. Open **isteel-app.pages.dev/overtime/**, or tap ថែមម៉ោង on the home menu.

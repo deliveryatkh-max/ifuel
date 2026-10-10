@@ -103,6 +103,7 @@
     Approved: { cls: 'approved', km: 'បានអនុម័ត', en: 'Approved', ico: '✅' },
     Rejected: { cls: 'rejected', km: 'បានបដិសេធ', en: 'Rejected', ico: '❌' },
     'Requires Follow-up': { cls: 'follow', km: 'ត្រូវការតាមដាន', en: 'Requires Follow-up', ico: '⚠️' },
+    Recorded: { cls: 'recorded', km: 'កត់ត្រាមុន', en: 'Earlier record', ico: '📄' },
   };
   const badge = s => { const x = STATUS[s] || STATUS.Pending; return `<span class="badge ${x.cls}">${x.ico} ${esc(t(x.km, x.en))}</span>`; };
 
@@ -559,19 +560,51 @@
   }
 
   // ---------- My requests ----------
+  // ---------- My requests: total OT between two dates ----------
+  // The summary covers every OT row of the employee in the sheet (old ones too), opened with their Employee ID
+  // plus one of their Request IDs saved on this phone. The last result is shown at once while it refreshes.
+  const monthStart = ymd => ymd.slice(0, 8) + '01';
   async function renderMine() {
     scanner.stop();
     state.tab = 'mine'; paintTabs();
-    redraw = () => draw(getJ(K.items, []), false);
     const mine = getJ(K.mine, []);
-    const draw = (items, loading, err) => {
-      const byId = {}; items.forEach(i => { byId[i.reqId] = i; });
-      const rows = mine.map(m => byId[m.reqId]).filter(Boolean);
+    const ids = [];
+    mine.forEach(m => { if (ids.indexOf(m.id) < 0) ids.push(m.id); });
+    const today = (cfg && cfg.today) || localYmd();
+    const f = state.sumF = Object.assign({ id: ids[0] || '', from: monthStart(today), to: today }, state.sumF || {});
+    if (ids.indexOf(f.id) < 0) f.id = ids[0] || '';
+    const cacheKey = () => 'ot_sum_' + f.id + '_' + f.from + '_' + f.to;
+    const nameOf = id => { const p = people().find(x => x.id === id); return p ? p.en + (p.kh ? ' · ' + p.kh : '') : ''; };
+    const draw = (res, loading, err) => {
+      const tt = res && res.totals;
       $('#view').innerHTML = `
         <div class="head2"><h2>${t('សំណើរបស់ខ្ញុំ', 'My requests')}</h2>
-          <button type="button" class="btn" id="refresh" ${loading ? 'disabled' : ''}>${loading ? '<span class="sp"></span>' : '🔄'} ${t('ផ្ទុកឡើងវិញ', 'Refresh')}</button></div>
+          ${ids.length ? `<button type="button" class="btn" id="refresh" ${loading ? 'disabled' : ''}>${loading ? '<span class="sp"></span>' : '🔄'} ${t('ផ្ទុកឡើងវិញ', 'Refresh')}</button>` : ''}</div>
+        ${ids.length ? `
+        <section class="card sumcard">
+          ${ids.length > 1 ? `<label class="f" for="sId">${t('បុគ្គលិក', 'Employee')}</label>
+            <select class="in" id="sId">${ids.map(id => `<option value="${esc(id)}" ${id === f.id ? 'selected' : ''}>${esc(id)}${nameOf(id) ? ' · ' + esc(nameOf(id)) : ''}</option>`).join('')}</select>`
+          : `<div class="who"><b>${esc(f.id)}</b> ${esc(nameOf(f.id))}</div>`}
+          <div class="field row2" style="margin-top:10px">
+            <div><label class="f" for="sFrom">${t('ពីថ្ងៃ', 'From')}</label><input class="in" type="date" id="sFrom" value="${esc(f.from)}" max="${esc(f.to)}"></div>
+            <div><label class="f" for="sTo">${t('ដល់ថ្ងៃ', 'To')}</label><input class="in" type="date" id="sTo" value="${esc(f.to)}" min="${esc(f.from)}"></div>
+          </div>
+          <div class="sumtotal">
+            <span>${t('ម៉ោងថែមសរុប', 'Total OT')}</span>
+            <b id="sumTotal">${tt ? esc(hoursText(tt.total)) : (loading ? '<span class="sp"></span>' : '—')} <small>${t('ម៉ោង', 'h')}</small></b>
+            <em>${tt ? esc(tt.count) + ' ' + t('ដង', tt.count === 1 ? 'request' : 'requests') : ''}</em>
+          </div>
+          ${tt ? `<div class="sumparts">
+            <span class="badge approved">✅ ${hoursText(tt.approved)} ${t('ម៉ោង', 'h')}</span>
+            <span class="badge pending">⏳ ${hoursText(tt.pending)} ${t('ម៉ោង', 'h')}</span>
+            ${tt.recorded ? `<span class="badge recorded">📄 ${hoursText(tt.recorded)} ${t('ម៉ោង', 'h')}</span>` : ''}
+            ${tt.rejected ? `<span class="badge rejected">❌ ${hoursText(tt.rejected)} ${t('ម៉ោង', 'h')}</span>` : ''}
+          </div>
+          <div class="hint">${t('សរុប = បានអនុម័ត + កំពុងរង់ចាំ' + (tt.recorded ? ' + កត់ត្រាមុន' : '') + '។ មិនរាប់សំណើដែលបានបដិសេធទេ។', 'Total = approved + pending' + (tt.recorded ? ' + earlier records' : '') + '. Rejected requests are not counted.')}</div>` : ''}
+        </section>
         ${err ? `<div class="alert bad" style="margin:0 0 12px">${esc(err)}</div>` : ''}
-        <div class="list">${rows.length ? rows.map(itemHtml).join('') : `<div class="empty">${loading ? '<div class="spinner" style="margin:20px auto"></div>' : t('មិនទាន់មានសំណើនៅលើទូរស័ព្ទនេះទេ។', 'No requests on this phone yet.')}</div>`}</div>
+        <div class="list">${res && res.items.length ? res.items.map(itemHtml).join('') : `<div class="empty">${loading && !res ? '<div class="spinner" style="margin:20px auto"></div>' : t('គ្មានថែមម៉ោងក្នុងចន្លោះថ្ងៃនេះទេ។', 'No OT in these dates.')}</div>`}</div>`
+        : `<div class="empty">${t('មិនទាន់មានសំណើនៅលើទូរស័ព្ទនេះទេ។', 'No requests on this phone yet.')}</div>`}
         <section class="card" style="margin-top:16px">
           <h2>🔍 ${t('ពិនិត្យសំណើ', 'Check a request')}</h2>
           <div class="field row2">
@@ -581,30 +614,39 @@
           <button type="button" class="btn ok" id="qBtn" style="width:100%">${t('ពិនិត្យ', 'Check')}</button>
           <div class="hint">${t('អ្នកអាចមើលបានតែសំណើរបស់អ្នកប៉ុណ្ណោះ (ត្រូវការទាំងលេខកាត និងលេខសំណើ)។', 'You can only see your own requests (both your Employee ID and the Request ID are needed).')}</div>
         </section>`;
-      $('#refresh').onclick = () => renderMine();
+      if ($('#refresh')) $('#refresh').onclick = () => renderMine();
+      if ($('#sId')) $('#sId').onchange = e => { f.id = e.target.value; renderMine(); };
+      const onDate = () => {
+        const a = $('#sFrom').value, b = $('#sTo').value;
+        if (!a || !b) return;
+        if (a > b) { toast(t('ថ្ងៃចាប់ផ្តើមត្រូវមុនថ្ងៃបញ្ចប់។', '"From" must be before "To".')); return; }
+        if (a === f.from && b === f.to) return;
+        f.from = a; f.to = b; renderMine();
+      };
+      if ($('#sFrom')) { $('#sFrom').onchange = onDate; $('#sTo').onchange = onDate; }
       $('#qBtn').onclick = check;
     };
-    draw(getJ(K.items, []), mine.length > 0);
-    if (!mine.length) return;
-    // One call per Employee ID used on this phone.
-    const groups = {};
-    mine.forEach(m => { (groups[m.id] = groups[m.id] || []).push(m.reqId); });
+    redraw = () => draw(getJ(cacheKey(), null), false);
+    if (!ids.length) return draw(null, false);
+    const cached = getJ(cacheKey(), null);
+    draw(cached, true);
+    const proof = (mine.find(m => m.id === f.id) || {}).reqId;
+    const key = cacheKey();
     try {
-      const lists = await Promise.all(Object.keys(groups).map(id => api('status', { id, requests: groups[id] })));
-      const items = [].concat.apply([], lists.map(l => l.items));
-      set(K.items, JSON.stringify(items));
-      if (state.tab === 'mine') draw(items, false);
+      const res = await api('summary', { id: f.id, proof, from: f.from, to: f.to });
+      set(key, JSON.stringify(res));
+      if (state.tab === 'mine' && key === cacheKey()) draw(res, false);
     } catch (e) {
-      if (state.tab === 'mine') draw(getJ(K.items, []), false, niceError(e));
+      if (state.tab === 'mine' && key === cacheKey()) draw(cached, false, niceError(e));
     }
   }
 
   function itemHtml(i) {
     return `<div class="item">
-      <div class="top"><span class="id">${esc(i.reqId)}</span>${badge(i.status)}</div>
+      <div class="top"><span class="id">${esc(i.reqId || '—')}</span>${badge(i.status)}</div>
       <div class="meta">📅 <b>${esc(i.dateText || fmtDate(i.date))}</b> · 🕒 ${esc(i.from)} – ${esc(i.to)} · <b>${esc(i.hours)} ${t('ម៉ោង', 'h')}</b></div>
-      <div class="meta">${esc(i.reason)}</div>
-      ${i.status === 'Approved' || i.status === 'Rejected' ? `<div class="meta">${t('ដោយ', 'By')} <b>${esc(i.reviewed)}</b> · ${esc(i.decided)}</div>` : `<div class="meta">${t('អ្នកអនុម័ត', 'Approver')}: <b>${esc(i.manager)}</b></div>`}
+      ${i.reason ? `<div class="meta">${esc(i.reason)}</div>` : ''}
+      ${i.status === 'Recorded' ? '' : i.status === 'Approved' || i.status === 'Rejected' ? `<div class="meta">${t('ដោយ', 'By')} <b>${esc(i.reviewed)}</b> · ${esc(i.decided)}</div>` : `<div class="meta">${t('អ្នកអនុម័ត', 'Approver')}: <b>${esc(i.manager)}</b></div>`}
       ${i.rejectReason ? `<div class="why">${t('មូលហេតុបដិសេធ', 'Rejection reason')}: ${esc(i.rejectReason)}</div>` : ''}
     </div>`;
   }
@@ -617,6 +659,7 @@
       const r = await api('status', { id, requests: [req] });
       if (!r.items.length) { toast(t('រកមិនឃើញសំណើនេះសម្រាប់លេខកាតនេះទេ។', 'No request with that ID for this Employee ID.')); return; }
       remember(id, req);
+      state.sumF = Object.assign(state.sumF || {}, { id });
       const items = getJ(K.items, []).filter(x => x.reqId !== req).concat(r.items);
       set(K.items, JSON.stringify(items));
       renderMine();
@@ -670,6 +713,12 @@
         db[reqId] = { reqId, id: p.id, status: e.ready ? 'Pending' : 'Requires Follow-up', date: p.date, from: h12(p.start), to: h12(p.end), hours: c.hours, reason: p.reason, manager: e.manager };
         set('ot_demo_db', JSON.stringify(db));
         return { reqId, status: db[reqId].status, manager: e.manager };
+      }
+      if (action === 'summary') {
+        const items = Object.keys(db).filter(k => /^OT-/.test(k)).map(k => db[k]).filter(x => x.id === p.id && x.date >= p.from && x.date <= p.to);
+        const tt = { approved: 0, pending: 0, rejected: 0, recorded: 0, total: 0, count: 0 };
+        items.forEach(x => { const k = x.status === 'Approved' ? 'approved' : x.status === 'Rejected' ? 'rejected' : 'pending'; tt[k] += x.hours; if (k !== 'rejected') { tt.total += x.hours; tt.count++; } });
+        return { totals: tt, items };
       }
       if (action === 'status') return { items: (p.requests || []).map(r => db[r]).filter(x => x && x.id === p.id) };
       throw new Error('Unknown action');
