@@ -285,26 +285,62 @@ function identity_(token) {
 }
 
 /**
- * Department names for the drop-down, from the "Department" sheet (Kim, 10 Oct 2026): the column whose
- * header contains "Department" or ផ្នែក, or the first column if none does. Row 1 is the header; Active = No hides a department.
+ * The "Department" sheet (Kim, 10 Oct 2026): one row per department. The column whose header contains
+ * "Department" or ផ្នែក (else column A) feeds the request form's drop-down; Active = No hides a department.
+ * One tick box column per app (same titles as in Users) says which apps a new person from that department
+ * gets: the request copies that row's ticks into their Users row. The columns are added automatically.
  */
-function departments_() {
+let deptCache_ = null;   // read once per request
+
+function deptTable_() {
+  if (deptCache_) return deptCache_;
   const ss = SpreadsheetApp.getActive();
-  const sheet = ss.getSheetByName(DEPT_SHEET);
+  let sheet = ss.getSheetByName(DEPT_SHEET);
   if (!sheet) {
-    ss.insertSheet(DEPT_SHEET).getRange(1, 1, 1, 2).setValues([['Department', 'Active']]).setFontWeight('bold');
-    return [];
+    sheet = ss.insertSheet(DEPT_SHEET);
+    sheet.getRange(1, 1, 1, 2).setValues([['Department', 'Active']]).setFontWeight('bold');
   }
-  if (sheet.getLastRow() < 2) return [];
-  const values = sheet.getDataRange().getValues();
-  const header = values.shift().map(h => String(h).trim().toLowerCase());
-  const name = Math.max(0, header.findIndex(h => h.indexOf('department') >= 0 || h.indexOf('ផ្នែក') >= 0));
-  const active = header.indexOf('active');
+  let header = sheet.getRange(1, 1, 1, Math.max(sheet.getLastColumn(), 1)).getValues()[0].map(h => String(h).trim());
+  const missing = HOME_APPS.filter(a => header.indexOf(a.col) < 0);
+  if (missing.length) {
+    const rows = Math.max(sheet.getLastRow() - 1, 0);
+    missing.forEach(a => {
+      const c = sheet.getLastColumn() + 1;
+      sheet.getRange(1, c).setValue(a.col).setFontWeight('bold');
+      // Starting ticks: the usual apps for everyone, Dashboard off. Change them per department.
+      if (rows) sheet.getRange(2, c, rows, 1).insertCheckboxes().setValues(new Array(rows).fill([DEFAULT_APPS.indexOf(a.key) >= 0]));
+      header.push(a.col);
+    });
+  }
+  const values = sheet.getLastRow() < 2 ? [] : sheet.getRange(2, 1, sheet.getLastRow() - 1, header.length).getValues();
+  const lower = header.map(h => h.toLowerCase());
+  const name = Math.max(0, lower.findIndex(h => h.indexOf('department') >= 0 || h.indexOf('ផ្នែក') >= 0));
+  const active = lower.indexOf('active');
   const seen = {};
-  return values
-    .filter(r => active < 0 || !isNo_(r[active]))
-    .map(r => String(r[name] || '').trim())
-    .filter(d => d && !seen[d] && (seen[d] = true));
+  const list = [];
+  values.forEach(r => {
+    const d = String(r[name] || '').trim();
+    if (!d || seen[d]) return;
+    const apps = {};
+    HOME_APPS.forEach(a => { const c = header.indexOf(a.col); apps[a.key] = r[c] === true || isYes_(r[c]); });
+    seen[d] = { name: d, active: active < 0 || !isNo_(r[active]), apps: apps };
+    list.push(seen[d]);
+  });
+  return (deptCache_ = list);
+}
+
+/** Department names for the drop-down. */
+function departments_() {
+  return deptTable_().filter(d => d.active).map(d => d.name);
+}
+
+/** The apps a new person from this department gets; the usual apps when the department isn't listed. */
+function deptApps_(dept) {
+  const row = deptTable_().find(d => d.name === dept);
+  if (row) return row.apps;
+  const apps = {};
+  HOME_APPS.forEach(a => { apps[a.key] = DEFAULT_APPS.indexOf(a.key) >= 0; });
+  return apps;
 }
 
 /** What the request form needs: the departments and anything this person already sent. */
@@ -345,6 +381,7 @@ function requestAccess_(token, p) {
     const list = departments_();
     if (list.length && list.indexOf(dept) < 0) throw new Error('Choose a department from the list. / សូមជ្រើសរើសផ្នែកពីបញ្ជី។');
   }
+  const apps = deptApps_(dept);
   const lock = LockService.getScriptLock();
   lock.waitLock(20000);
   let added = false, changed = false;
@@ -364,7 +401,7 @@ function requestAccess_(token, p) {
       sheet.appendRow(header.map(h => ({ Email: email, Name: name, Role: 'user', Active: 'No' })[h] || ''));
       r = sheet.getLastRow();
       // App tick boxes on the new row: the default apps ticked, so the admin only switches Active to Yes.
-      HOME_APPS.forEach(a => { const c = col(a.col); if (c >= 0) sheet.getRange(r, c + 1).insertCheckboxes().setValue(DEFAULT_APPS.indexOf(a.key) >= 0); });
+      HOME_APPS.forEach(a => { const c = col(a.col); if (c >= 0) sheet.getRange(r, c + 1).insertCheckboxes().setValue(apps[a.key]); });
       added = true;
     } else {
       r = i + 1;
@@ -376,6 +413,10 @@ function requestAccess_(token, p) {
       // Kept as text so IDs like 00123 keep their zeros.
       sheet.getRange(r, col('Employee ID') + 1).setNumberFormat('@').setValue(empId);
       sheet.getRange(r, col('Department') + 1).setValue(dept);
+      // Still waiting for the admin and the department changed: the app ticks follow the new department.
+      if (i > 0 && old[1] !== dept) {
+        HOME_APPS.forEach(a => { const c = col(a.col); if (c >= 0) sheet.getRange(r, c + 1).insertCheckboxes().setValue(apps[a.key]); });
+      }
     }
   } finally {
     lock.releaseLock();
@@ -392,9 +433,10 @@ function requestAccess_(token, p) {
         '👤 ' + esc(name || '-'),
         empId ? '🪪 ' + esc(empId) : null,
         dept ? '🏢 ' + esc(dept) : null,
+        dept ? '📱 ' + HOME_APPS.filter(a => apps[a.key]).map(a => a.col).join(', ') : null,
         '📧 ' + esc(email),
         '',
-        'Users sheet: Active = Yes ដើម្បីអនុញ្ញាត (កម្មវិធីធម្មតាបានធីករួច) / set Active = Yes to allow (the usual apps are already ticked).',
+        'Users sheet: Active = Yes ដើម្បីអនុញ្ញាត (កម្មវិធីតាមផ្នែកបានធីករួច) / set Active = Yes to allow (the apps for their department are already ticked).',
       ].filter(x => x !== null).join('\n') });
     } catch (e) { /* the request is saved in the sheet even if Telegram fails */ }
   }
