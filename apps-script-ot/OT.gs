@@ -26,20 +26,25 @@ const OT = {
   APPROVERS: 'OT Approvers',
   LOG: 'OT Log',
   SETTINGS: 'OT App Settings',
+  DEPTS: 'OT Departments',
+  FORM_URL: 'https://isteel-app.pages.dev/overtime/',
   RELAY_URL: 'https://isteel-app.pages.dev/tg/ot',
 };
 
 const STATUS = { PENDING: 'Pending', APPROVED: 'Approved', REJECTED: 'Rejected', FOLLOW: 'Requires Follow-up' };
 
 // Columns added to "OT Data" after the existing ones (in this order, only if missing).
-const NEW_DATA_COLS = ['Request ID', 'Status', 'Approver', 'Decision Time', 'Rejection Reason', 'Telegram Ref', 'Note'];
+const NEW_DATA_COLS = ['Request ID', 'Status', 'Approver', 'Decision Time', 'Rejection Reason', 'Telegram Ref', 'Note', 'Department'];
+
+// Department QR codes: the form opens only after one of these is scanned.
+const DEPT_COLS = ['Department', 'Department ID', 'QR Link', 'Print QR', 'QR Code', 'Active'];
 
 const APPROVER_COLS = ['Telegram Username', 'Manager Name', 'Chat ID', 'Telegram Name', 'Registered At', 'Active'];
 const LOG_COLS = ['Time', 'Request ID', 'Event', 'By', 'Detail', 'Key'];
 const SETTING_ROWS = [
   ['Setting', 'Value', 'What it does'],
   ['MAX_HOURS_PER_REQUEST', '', 'Largest OT hours one request may have. Blank = no limit.'],
-  ['MAX_DAYS_IN_PAST', '', 'How many days back an OT date may be. Blank = no limit.'],
+  ['MAX_DAYS_IN_PAST', '7', 'How many days back an OT date may be (today counts as 0). Blank = 7.'],
   ['MAX_DAYS_IN_FUTURE', '', 'How many days ahead an OT date may be. Blank = no limit.'],
   ['ALLOW_OVERNIGHT', 'Yes', 'Yes = End time earlier than Start means the next morning (e.g. 10:00 PM – 12:30 AM).'],
   ['SITE_LATLONG', '', 'Site GPS as "lat, long" (e.g. 11.5564, 104.9282). Blank = no location check.'],
@@ -52,7 +57,7 @@ const DATA_FIELDS = {
   kh: ['khmername'], from: ['from', 'start', 'starttime'], to: ['to', 'end', 'endtime'], hours: ['othr', 'othours', 'hours'],
   reason: ['reasonofot', 'reason', 'otreason'], record: ['datetimerecord', 'submitted'], latlong: ['latlong'],
   reviewed: ['reviewedby'], reqId: ['requestid'], status: ['status'], approver: ['approver'], decided: ['decisiontime'],
-  rejectReason: ['rejectionreason'], tgRef: ['telegramref'], note: ['note'],
+  rejectReason: ['rejectionreason'], tgRef: ['telegramref'], note: ['note'], dept: ['department'],
 };
 const REQUIRED_DATA = ['date', 'id', 'name', 'from', 'to', 'hours'];
 
@@ -71,6 +76,7 @@ function doPost(e) {
       case 'config': return json_({ ok: true, data: Object.assign(publicConfig_(), p.withEmployees ? employeeList_() : {}) });
       case 'lookup': return json_({ ok: true, data: lookupPublic_(p.id) });
       case 'employees': return json_({ ok: true, data: employeeList_() });
+      case 'dept': return json_({ ok: true, data: deptPublic_(p.code) });
       case 'submit': return json_({ ok: true, data: submit_(p) });
       case 'status': return json_({ ok: true, data: statusFor_(p) });
       default: return json_({ ok: false, error: 'Unknown action' });
@@ -161,7 +167,7 @@ function settings_() {
   const ll = String(out.SITE_LATLONG || '').match(/^\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*$/);
   return {
     maxHours: num('MAX_HOURS_PER_REQUEST'),
-    maxPast: num('MAX_DAYS_IN_PAST'),
+    maxPast: num('MAX_DAYS_IN_PAST') == null ? 7 : num('MAX_DAYS_IN_PAST'),   // Kim 2026-10-10: back-dating up to 7 days
     maxFuture: num('MAX_DAYS_IN_FUTURE'),
     overnight: !/^(no|n|false|0)$/i.test(out.ALLOW_OVERNIGHT || 'Yes'),
     site: ll ? { lat: +ll[1], lng: +ll[2], radius: num('SITE_RADIUS_M') || 100 } : null,
@@ -178,7 +184,26 @@ function publicConfig_() {
   return {
     reasons, maxHours: s.maxHours, maxPast: s.maxPast, maxFuture: s.maxFuture, overnight: s.overnight,
     needGps: !!s.site, radius: s.site ? s.site.radius : null, today: todayYmd_(), holidays: holidays_(),
+    needDept: Object.keys(depts_()).length > 0,
   };
+}
+
+const reasonKey_ = r => String(r || '').replace(/[.…\s]+$/, '').replace(/\s+/g, ' ').trim().toLowerCase();
+
+function addReason_(reason) {
+  const text = String(reason || '').replace(/\s+/g, ' ').trim();
+  if (text.length < 3 || text.length > 200) return false;
+  const sh = ss_().getSheetByName(OT.REASON);
+  if (!sh) return false;
+  return withLock_(() => {
+    const last = sh.getLastRow();
+    const have = last > 1 ? sh.getRange(2, 1, last - 1, 1).getDisplayValues().map(r => reasonKey_(r[0])) : [];
+    if (have.indexOf(reasonKey_(text)) >= 0) return false;
+    ensureRows_(sh, last + 1);
+    sh.getRange(last + 1, 1).setValue(text);
+    sh.getRange(2, 1, last, 1).sort({ column: 1, ascending: true });
+    return true;
+  });
 }
 
 // Khmer names for the holidays listed (in English) in the Setting sheet. A Khmer name typed in the sheet
@@ -356,6 +381,43 @@ function lookupPublic_(id) {
   };
 }
 
+// ---------------------------------------------------------------- department QR codes
+// "OT Departments": one row per department. makeDepartmentQR() gives each named row a random Department ID;
+// the printed QR holds the form link with that ID (…/overtime/?d=D-XXXXXX). Active = No turns a code off.
+function depts_() {
+  const cache = CacheService.getScriptCache();
+  const hit = cache.get('depts');
+  if (hit) return JSON.parse(hit);
+  const out = {};
+  const sh = ss_().getSheetByName(OT.DEPTS);
+  if (sh && sh.getLastRow() > 1) {
+    const head = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0].map(norm_);
+    const cName = head.indexOf('department'), cId = head.indexOf('departmentid'), cAct = head.indexOf('active');
+    if (cName >= 0 && cId >= 0) {
+      sh.getRange(2, 1, sh.getLastRow() - 1, sh.getLastColumn()).getDisplayValues().forEach(r => {
+        const id = String(r[cId]).trim().toUpperCase(), name = String(r[cName]).trim();
+        if (id && name && !(cAct >= 0 && /^(no|n|false|0)$/i.test(String(r[cAct]).trim()))) out[id] = name;
+      });
+    }
+  }
+  try { cache.put('depts', JSON.stringify(out), 120); } catch (e) { /* small list */ }
+  return out;
+}
+
+// The code may be the bare ID or the whole link from the QR.
+function deptCode_(raw) {
+  const s = String(raw || '').trim();
+  const m = s.match(/[?&]d=([A-Za-z0-9-]+)/);
+  return (m ? m[1] : s).toUpperCase().slice(0, 30);
+}
+
+function deptPublic_(raw) {
+  const code = deptCode_(raw);
+  const name = code && depts_()[code];
+  if (!name) fail_('BAD_QR', 'This QR code is not a valid department code. Please scan your department QR code again.');
+  return { code, name };
+}
+
 // ---------------------------------------------------------------- OT Data access
 function dataSheet_() {
   const sh = sheet_(OT.DATA);
@@ -389,7 +451,7 @@ function readRow_(ds, row) {
     from: gd('from'), to: gd('to'), hours: g('hours'), reason: String(g('reason') || ''),
     approver: String(g('approver') || ''), reviewed: String(g('reviewed') || ''),
     decided: gd('decided'), rejectReason: String(g('rejectReason') || ''), tgRef: String(g('tgRef') || ''),
-    submitted: gd('record'), note: String(g('note') || ''),
+    submitted: gd('record'), note: String(g('note') || ''), dept: String(g('dept') || ''),
   };
 }
 
@@ -486,6 +548,9 @@ function submit_(p) {
 
   const cfg = settings_();
   const v = validate_(p, cfg);
+  const deptList = depts_();
+  let dept = '';
+  if (Object.keys(deptList).length) dept = deptPublic_(p.dept).name;   // the department QR must have been scanned
 
   const saved = withLock_(() => {
     // Same form sent again (double tap, refresh, retry after a dropped connection) → the first result, never a 2nd row.
@@ -527,6 +592,7 @@ function submit_(p) {
     put('status', route.ok ? STATUS.PENDING : STATUS.FOLLOW);
     put('approver', emp.manager);
     put('note', route.ok ? '' : route.msg);
+    put('dept', dept);
 
     ensureRows_(ds.sh, row);
     if (last >= 2) ds.sh.getRange(last, 1, 1, ds.width).copyTo(ds.sh.getRange(row, 1, 1, ds.width), SpreadsheetApp.CopyPasteType.PASTE_FORMAT, false);
@@ -552,6 +618,9 @@ function submit_(p) {
     const rec = r ? readRow_(ds, r) : null;
     return { reqId: saved.reqId, status: rec ? rec.status : STATUS.PENDING, repeated: true };
   }
+
+  // A reason typed under "Other" joins the OT Reason list (A–Z), so the next person can pick it.
+  try { addReason_(saved.v.reason); } catch (e) { log_(saved.reqId, 'REASON_NOT_ADDED', 'system', safeErr_(e)); }
 
   // Saved. Now the Telegram message goes to that employee's own line manager only.
   let status = saved.route.ok ? STATUS.PENDING : STATUS.FOLLOW;
@@ -628,11 +697,12 @@ function requestText_(rec, header) {
     '• Employee ID: ' + esc_(rec.id),
     '• Employee Name: ' + esc_(rec.en),
     '• Khmer Name: ' + esc_(rec.kh || '-'),
+  ].concat(rec.dept ? ['• Department: ' + esc_(rec.dept)] : []).concat([
     '• OT Date: ' + esc_(rec.dateText || rec.date),
     '• OT Time: ' + esc_(rec.from) + ' – ' + esc_(rec.to),
     '• Total OT Hours: <b>' + esc_(rec.hours) + '</b>',
     '• Reason: ' + esc_(rec.reason || '-'),
-  ].join('\n');
+  ]).join('\n');
 }
 
 const KEYBOARD_ = reqId => ({ inline_keyboard: [[{ text: '✅ Approve', callback_data: 'a:' + reqId }, { text: '❌ Reject', callback_data: 'r:' + reqId }]] });
@@ -873,6 +943,7 @@ function setup() {
     s.setFrozenRows(1);
     s.setColumnWidth(1, 210); s.setColumnWidth(2, 180); s.setColumnWidth(3, 520);
   }
+  makeDepartmentQR();
   const props = PropertiesService.getScriptProperties();
   if (!props.getProperty('OT_WEBHOOK_SECRET')) props.setProperty('OT_WEBHOOK_SECRET', Utilities.getUuid().replace(/-/g, '') + Utilities.getUuid().replace(/-/g, ''));
   if (!ScriptApp.getProjectTriggers().some(t => t.getHandlerFunction() === 'retryFollowUps')) {
@@ -880,6 +951,48 @@ function setup() {
   }
   console.log('Setup done. Added OT Data columns: ' + (add.join(', ') || 'none (already there)'));
   console.log(checkData());
+}
+
+/**
+ * Gives every department in "OT Departments" a unique Department ID, its QR link, a print link and a QR picture.
+ * Type the department names in column A, then run this again. Existing IDs are never changed.
+ * If the tab is empty, one row "OT Department" is added so the form works straight away (rename it freely).
+ */
+function makeDepartmentQR() {
+  const sh = ensureSheet_(OT.DEPTS, DEPT_COLS);
+  const head = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0].map(norm_);
+  DEPT_COLS.forEach(c => {   // add any missing heading at the end, keep what is there
+    if (head.indexOf(norm_(c)) < 0) { const col = sh.getLastColumn() + 1; sh.getRange(1, col).setValue(c).setFontWeight('bold'); head.push(norm_(c)); }
+  });
+  const col = n => head.indexOf(norm_(n)) + 1;
+  if (sh.getLastRow() < 2) sh.getRange(2, col('Department')).setValue('OT Department');
+  const n = sh.getLastRow() - 1;
+  const rows = sh.getRange(2, 1, n, sh.getLastColumn()).getDisplayValues();
+  const used = {};
+  rows.forEach(r => { const id = String(r[col('Department ID') - 1]).trim().toUpperCase(); if (id) used[id] = true; });
+  const abc = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+  const made = [];
+  rows.forEach((r, i) => {
+    const name = String(r[col('Department') - 1]).trim();
+    if (!name) return;
+    let id = String(r[col('Department ID') - 1]).trim().toUpperCase();
+    const row = i + 2;
+    if (!id) {
+      do { id = 'D-'; for (let k = 0; k < 6; k++) id += abc[Math.floor(Math.random() * abc.length)]; } while (used[id]);
+      used[id] = true;
+      sh.getRange(row, col('Department ID')).setValue(id);
+      made.push(name + ' = ' + id);
+    }
+    const link = OT.FORM_URL + '?d=' + id;
+    sh.getRange(row, col('QR Link')).setValue(link);
+    sh.getRange(row, col('Print QR')).setValue(OT.FORM_URL + 'qr.html?d=' + id + '&n=' + encodeURIComponent(name));
+    sh.getRange(row, col('QR Code')).setFormula('=IMAGE("https://api.qrserver.com/v1/create-qr-code/?size=240x240&margin=8&data=' + encodeURIComponent(link) + '")');
+    if (!String(r[col('Active') - 1]).trim()) sh.getRange(row, col('Active')).setValue('Yes');
+    sh.setRowHeight(row, 130);
+  });
+  sh.setColumnWidth(col('QR Code'), 140);
+  CacheService.getScriptCache().remove('depts');
+  console.log('New Department IDs: ' + (made.join(', ') || 'none (all rows already have one)'));
 }
 
 /** Step 3 (after deploying the web app). Points the bot at this script through the Cloudflare relay. */
