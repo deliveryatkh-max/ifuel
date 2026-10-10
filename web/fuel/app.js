@@ -460,6 +460,7 @@
       signOut(false);
     };
     $('#reviewTab').hidden = !(u.role === 'reviewer' || u.role === 'admin');
+    reviewBadge();
   }
 
   function enterApp() {
@@ -469,7 +470,14 @@
     $('#homeOnly').hidden = true;
     $('#navbar').hidden = false;
     if (!state.form) resetForm();
-    if (nav.i >= 0 && nav.stack[nav.i]) paint(nav.stack[nav.i]);
+    // Opened from a truck's QR sticker with the phone camera: start a new entry for that truck.
+    const qrPlate = new URLSearchParams(location.search).get('plate');
+    if (qrPlate) {
+      try { history.replaceState(history.state, '', location.pathname); } catch (e) { /* ignore */ }
+      if (state.editing) leaveEdit();
+      useTruckCode(qrPlate);
+      if (current() && current().s === 'new') paint(current()); else go({ s: 'new' });
+    } else if (nav.i >= 0 && nav.stack[nav.i]) paint(nav.stack[nav.i]);
     else go({ s: 'new' });
     outbox.load().then(() => { outboxChanged(); flushOutbox(); });
   }
@@ -516,6 +524,17 @@
 
   const current = () => nav.stack[nav.i];
 
+  /** Red count on the Reviewer tab: entries not reviewed yet (from the list when loaded, else from the server). */
+  function reviewBadge() {
+    const tab = $('#reviewTab');
+    if (!tab || tab.hidden || !state.config) return;
+    const n = rv.rows ? rv.rows.filter(r => !r.status).length : (state.config.pendingCount || 0);
+    let b = $('.tab-badge', tab);
+    if (!b) { tab.insertAdjacentHTML('beforeend', '<i class="tab-badge"></i>'); b = $('.tab-badge', tab); }
+    b.textContent = n > 99 ? '99+' : String(n);
+    b.hidden = !n;
+  }
+
   /** Draws a screen without changing the history. */
   function paint(screen) {
     if (screen.s !== 'edit' && state.editing) leaveEdit();
@@ -527,6 +546,7 @@
     $('#navBack').disabled = nav.i <= 0;
     $('#navFwd').disabled = nav.i >= nav.stack.length - 1;
     $('#navTitle').textContent = TITLES[screen.s] ? L(...TITLES[screen.s]) : '';
+    reviewBadge();
     window.scrollTo(0, 0);
     if (screen.s === 'new') renderForm();
     else if (screen.s === 'mine') renderMine();
@@ -556,7 +576,118 @@
     state.editing = null;
     state.form = { type: '', plate: '', driver: '', km: '', hour: '', litres: '', note: '',
       odoPhoto: null, hourPhoto: null, pumpPhoto: null, signature: null };
+    applyRemembered(state.form);
     startGps();
+  }
+
+  // ---------------- Remembered truck and driver (per phone) ----------------
+  // The last truck and driver used on this phone fill the next form, with a green "remembered" tag.
+  const lastKey = () => 'fr_last_' + (who() || 'demo');
+  function remember(f) {
+    storeSet(lastKey(), JSON.stringify({ type: f.type, plate: f.plate, driver: f.driver }));
+  }
+  function applyRemembered(f) {
+    const cfg = state.config;
+    let last = null;
+    try { last = JSON.parse(storeGet(lastKey()) || 'null'); } catch (e) { /* ignore */ }
+    if (!cfg || !last || !typeInfo(last.type)) return;
+    const t = typeInfo(last.type);
+    const plates = t.meter === 'km' ? cfg.plates : ((cfg.equipment || {})[t.name] || null);
+    f.type = last.type;
+    if (last.plate && (!plates || plates.includes(last.plate))) { f.plate = last.plate; f.remembered = { plate: true }; }
+    if (last.driver && cfg.drivers.some(d => d.name === last.driver)) { f.driver = last.driver; f.remembered = Object.assign({}, f.remembered, { driver: true }); }
+    if (t.meter === 'km' && f.plate && plateBroken(f.plate)) { f.meterBroken = true; f.autoBroken = true; }
+  }
+
+  /** Puts a truck on the form: its usual driver (when it has only one) and the odometer-broken tick. */
+  function pickPlate(v, isNew) {
+    const f = state.form, cfg = state.config;
+    f.plate = v;
+    f.newPlate = !!isNew;
+    if (f.remembered) f.remembered.plate = false;
+    const matches = cfg.drivers.filter(d => d.plate === v);
+    if (matches.length === 1) { f.driver = matches[0].name; f.newDriver = false; if (f.remembered) f.remembered.driver = false; }
+    // Trucks marked "Odometer Broken? = Yes" in Driver & Truck get Meter broken ticked for them.
+    if (plateBroken(v)) { f.meterBroken = true; f.km = ''; f.autoBroken = true; }
+    else if (f.autoBroken) { f.meterBroken = false; f.autoBroken = false; }
+  }
+
+  // ---------------- Truck QR code ----------------
+  // Each truck has a sticker with a link like https://…/fuel/?plate=3F-5849. Scanning it in the app, or
+  // opening the link with the phone camera, fills the truck and its driver.
+  function plateFromCode(text) {
+    const s = String(text || '').trim();
+    let p = '';
+    try { p = new URL(s).searchParams.get('plate') || ''; } catch (e) { p = s; }
+    p = p.toUpperCase().replace(/\s+/g, '');
+    return (state.config.plates || []).find(x => x.toUpperCase() === p) || '';
+  }
+  function useTruckCode(text) {
+    const plate = plateFromCode(text);
+    if (!plate) { toast(L('QR នេះមិនមែនជាឡានក្នុងបញ្ជីទេ', 'This QR code is not a truck in the list')); return false; }
+    if (state.editing) return false;
+    const truckType = (state.config.types || []).find(t => t.meter === 'km');
+    if (truckType && typeInfo(state.form.type) !== truckType) { state.form.type = truckType.name; }
+    pickPlate(plate, false);
+    toast('🚚 ' + plate);
+    return true;
+  }
+  let qrLib = null;
+  function loadQrLib() {
+    return qrLib || (qrLib = new Promise((resolve, reject) => {
+      const s = document.createElement('script');
+      s.src = '../vendor/jsQR.min.js'; s.onload = () => resolve(window.jsQR); s.onerror = () => { qrLib = null; reject(new Error('QR reader did not load')); };
+      document.head.appendChild(s);
+    }));
+  }
+  async function scanTruck() {
+    let stream = null, stopped = false, timer = 0;
+    const stop = () => { stopped = true; clearTimeout(timer); if (stream) stream.getTracks().forEach(t => t.stop()); };
+    const sh = openSheet(L('ស្កេន QR លើឡាន', 'Scan the truck QR'), `
+      <div class="qr-view"><video playsinline muted></video><div class="qr-frame"></div></div>
+      <p class="hint center" id="qrMsg">${L('ដាក់ QR ក្នុងប្រអប់', 'Hold the QR code inside the square')}</p>
+      <label class="sheet-btn"><input type="file" accept="image/*" capture="environment"><span class="ic">📷</span><span>${L('ថតរូប QR ជំនួសវិញ', 'Take a photo of the QR instead')}</span></label>`, 'qr-sheet', stop);
+    const video = $('video', sh.el), msg = $('#qrMsg', sh.el);
+    const done = text => {
+      if (stopped) return;
+      if (useTruckCode(text)) { sh.close(); renderForm(); }
+    };
+    const canvas = document.createElement('canvas'), ctx = canvas.getContext('2d', { willReadFrequently: true });
+    const decodeFrom = async src => {
+      const w = src.videoWidth || src.naturalWidth || src.width, h = src.videoHeight || src.naturalHeight || src.height;
+      if (!w || !h) return '';
+      if ('BarcodeDetector' in window) {
+        try { const r = await new window.BarcodeDetector({ formats: ['qr_code'] }).detect(src); if (r[0]) return r[0].rawValue; } catch (e) { /* fall back to jsQR */ }
+      }
+      const jsQR = await loadQrLib();
+      const scale = Math.min(1, 720 / Math.max(w, h));
+      canvas.width = Math.round(w * scale); canvas.height = Math.round(h * scale);
+      ctx.drawImage(src, 0, 0, canvas.width, canvas.height);
+      const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const code = jsQR(img.data, img.width, img.height, { inversionAttempts: 'dontInvert' });
+      return code ? code.data : '';
+    };
+    $('input[type=file]', sh.el).onchange = async e => {
+      const file = e.target.files && e.target.files[0];
+      if (!file) return;
+      const img = new Image();
+      img.onload = async () => { const text = await decodeFrom(img).catch(() => ''); URL.revokeObjectURL(img.src); if (text) done(text); else msg.textContent = L('រកមិនឃើញ QR ក្នុងរូប', 'No QR code found in the photo'); };
+      img.src = URL.createObjectURL(file);
+    };
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false });
+      if (stopped) { stop(); return; }
+      video.srcObject = stream; await video.play();
+      const tick = async () => {
+        if (stopped) return;
+        const text = await decodeFrom(video).catch(() => '');
+        if (text) done(text); else timer = setTimeout(tick, 180);
+      };
+      tick();
+    } catch (e) {
+      msg.textContent = L('មិនអាចបើកកាមេរ៉ា។ សូមថតរូប QR ខាងក្រោម។', 'Camera not available. Take a photo of the QR below.');
+      $('.qr-view', sh.el).hidden = true;
+    }
   }
 
   const plateBroken = plate => (state.config.brokenPlates || []).includes(plate);
@@ -629,7 +760,7 @@
     const req = t && t.required ? ' <span class="req">*</span>' : '';
     const pickBtn = (id, value, isNew) => `
       <button type="button" class="picker" id="${id}">
-        <span class="${value ? '' : 'ph'}">${esc(value || L('— ជ្រើសរើស —', '— Select —'))}${isNew ? ` <small class="new-tag">${L('ថ្មី', 'New')}</small>` : ''}</span><span class="pk-ic" aria-hidden="true">🔍</span>
+        <span class="${value ? '' : 'ph'}">${esc(value || L('— ជ្រើសរើស —', '— Select —'))}${isNew ? ` <small class="new-tag">${L('ថ្មី', 'New')}</small>` : value && f.remembered && f.remembered[id] ? ` <small class="new-tag kept">${L('ចងចាំពីលើកមុន', 'Remembered')}</small>` : ''}</span><span class="pk-ic" aria-hidden="true">🔍</span>
       </button>`;
 
     const photoSlot = (key, km, en, required, existing) => { const title = L(km, en); return `
@@ -643,6 +774,7 @@
     $('#view').innerHTML = `
       <h2>${editing ? `${L('កែប្រែ', 'Edit')} ${esc(editing.id)}` : L('ការចាក់សាំងថ្មី', 'New fuel refill')}</h2>
       ${editing ? '' : '<div id="outboxNote"></div>'}
+      ${editing || !(cfg.types || []).some(x => x.meter === 'km') ? '' : `<button type="button" class="qr-btn" id="qrScan"><span class="qr-ic" aria-hidden="true">📷</span><span><b>${L('ស្កេន QR លើឡាន', 'Scan the truck QR')}</b><small>${L('ផ្លាកលេខ និងតៃកុង បំពេញដោយស្វ័យប្រវត្តិ', 'Fills the plate and driver for you')}</small></span></button>`}
 
       <div class="card">
         <div class="field">
@@ -718,6 +850,7 @@
       ${editing ? `<p class="center"><button class="btn" id="cancelEdit">${L('បោះបង់', 'Cancel')}</button></p>` : ''}
     `;
     drawOutboxNote();
+    if ($('#qrScan')) $('#qrScan').onclick = scanTruck;
 
     // type tiles
     $$('.type-btn').forEach(b => b.onclick = () => {
@@ -729,6 +862,7 @@
       if (next.defaultEquipment && (wasDefault || !f.plate)) f.plate = next.defaultEquipment;
       else if (t && t.defaultEquipment && f.plate === t.defaultEquipment) f.plate = '';
       f.type = b.dataset.type;
+      f.remembered = null;
       renderForm();
     });
     if (!t) return;
@@ -756,16 +890,7 @@
           },
           label: v => `➕ ${L('បន្ថែមឡានថ្មី', 'Add new truck')}: ${v}`,
         } : null,
-        onPick: (v, isNew) => {
-          f.plate = v;
-          f.newPlate = !!isNew;
-          const matches = cfg.drivers.filter(d => d.plate === v);
-          if (matches.length === 1) f.driver = matches[0].name;
-          // Trucks marked "Odometer Broken? = Yes" in Driver & Truck get Meter broken ticked for them.
-          if (plateBroken(v)) { f.meterBroken = true; f.km = ''; f.autoBroken = true; }
-          else if (f.autoBroken) { f.meterBroken = false; f.autoBroken = false; }
-          renderForm();
-        },
+        onPick: (v, isNew) => { pickPlate(v, isNew); renderForm(); },
       });
     } else {
       plate.oninput = () => { f.plate = plate.value; };
@@ -794,7 +919,7 @@
           clean: q => q.replace(/^\s*[0-9០-៩]+\s*[.)\-]?\s*/, '').replace(/\s+/g, ' ').trim(),
           label: v => `➕ ${L('បន្ថែមតៃកុងថ្មី', 'Add new driver')}: ${newDriverLabel(v)}`,
         },
-        onPick: (v, isNew) => { f.driver = v; f.newDriver = !!isNew; renderForm(); },
+        onPick: (v, isNew) => { f.driver = v; f.newDriver = !!isNew; if (f.remembered) f.remembered.driver = false; renderForm(); },
       });
     };
     ['km', 'hour', 'litres'].forEach(k => {
@@ -825,7 +950,7 @@
   }
 
   /** Opens a bottom sheet. Tapping outside, ✕ or Esc closes it. */
-  function openSheet(title, body, cls) {
+  function openSheet(title, body, cls, onClose) {
     const bg = document.createElement('div');
     bg.className = 'sheet-bg';
     bg.innerHTML = `
@@ -837,6 +962,7 @@
     const onKey = e => { if (e.key === 'Escape') close(); };
     const close = () => {
       document.removeEventListener('keydown', onKey);
+      if (onClose) onClose();
       bg.classList.remove('open');
       setTimeout(() => bg.remove(), 200);
     };
@@ -973,6 +1099,7 @@
         const item = { ref: newRef(), user: state.config.user.email, takenAt: f.takenAt || Date.now(), tries: 0, error: '', payload };
         payload.ref = item.ref; payload.takenAt = item.takenAt;
         await outbox.add(item);
+        remember(f);
         resetForm();
         go({ s: 'success', ref: item.ref });
         flushOutbox();
@@ -1101,6 +1228,35 @@
       </div>`;
   }
 
+  // Complete Data streak: entries the reviewer marked ត្រឹមត្រូវ in a row (newest first). Entries not reviewed
+  // yet are skipped; one marked មិនត្រឹមត្រូវ ends the streak. Badges at 5, 10 and 15.
+  const BADGES = [[5, '🥉', 'ផ្លាកសំរិទ្ធ', 'Bronze'], [10, '🥈', 'ផ្លាកប្រាក់', 'Silver'], [15, '🥇', 'ផ្លាកមាស', 'Gold']];
+  function streakOf(rows) {
+    let n = 0;
+    for (const r of rows.slice().sort((a, b) => (b.dateTime || 0) - (a.dateTime || 0))) {
+      if (!r.status) continue;
+      if (r.status !== STATUS_OK) break;
+      n++;
+    }
+    return n;
+  }
+  function streakHtml(rows) {
+    if (!rows || !rows.some(r => r.status)) return '';
+    const n = streakOf(rows);
+    const next = BADGES.find(b => n < b[0]);
+    const prev = BADGES.filter(b => n >= b[0]).pop();
+    const from = prev ? prev[0] : 0, to = next ? next[0] : from;
+    const pct = next ? Math.round((n - from) / (to - from) * 100) : 100;
+    return `<div class="streak">
+        <div class="streak-top"><span class="streak-ic" aria-hidden="true">${n ? '⭐' : '🌱'}</span>
+          <div><b>${n ? L(`ទិន្នន័យត្រឹមត្រូវ ${n} ដងជាប់គ្នា!`, `${n} correct entries in a row!`) : L('ចាប់ផ្តើមស៊េរីថ្មី', 'Start a new streak')}</b>
+            <small>${L('រូបថត Km និងលីត្រ ត្រឹមត្រូវ ដែលអ្នកពិនិត្យបានបញ្ជាក់', 'Photos, km and litres confirmed by the reviewer')}</small></div></div>
+        <div class="streak-bar"><i style="width:${pct}%"></i></div>
+        <small class="streak-next">${next ? L(`${next[0] - n} ដងទៀត ដើម្បីទទួលបាន ${next[1]} ${next[2]}`, `${next[0] - n} more for the ${next[1]} ${next[3]} badge`) : L('🎉 អ្នកទទួលបានផ្លាកមាសហើយ!', '🎉 You have the Gold badge!')}</small>
+      </div>
+      <div class="badges">${BADGES.map(([k, ic, km, en]) => `<div class="badge-box ${n >= k ? 'on' : ''}"><span>${ic}</span><b>${L(km, en)}</b><small>${k} ${L('ដង', 'in a row')}</small></div>`).join('')}</div>`;
+  }
+
   const MINE_HEAD = () => `<h2>${L('ការចាក់សាំងរបស់ខ្ញុំ (៤៥ ថ្ងៃចុងក្រោយ)', 'My entries (last 45 days)')}</h2>`;
 
   /** Draws My entries from what is already on the phone: entries still sending first, then the saved list. */
@@ -1115,7 +1271,7 @@
         : '')
       : entryCard(r, r.status ? '' : `<div class="actions"><button class="btn small" data-edit>✏️ ${L('កែប្រែ', 'Edit')}</button></div>`);
     const all = waiting.concat(rows || []);
-    $('#view').innerHTML = MINE_HEAD() + (all.length ? all.map(card).join('')
+    $('#view').innerHTML = MINE_HEAD() + streakHtml(rows) + (all.length ? all.map(card).join('')
       : `<div class="empty">${L('មិនទាន់មានទិន្នន័យ', 'No entries yet')}</div>`) + (rows ? '' : '<div class="spinner"></div>');
     $$('[data-edit]').forEach(b => b.onclick = () => go({ s: 'edit', id: b.closest('[data-id]').dataset.id, from: 'mine' }));
     $$('[data-fix]').forEach(b => b.onclick = () => fixOutboxItem(b.closest('[data-ref]').dataset.ref));
@@ -1236,6 +1392,7 @@
     $('#view').innerHTML = `
       <div class="rv-head">
         <h2>${L('អ្នកត្រួតពិនិត្យ', 'Reviewer · all entries')}</h2>
+        <a class="btn small" href="qr.html" title="${L('បោះពុម្ព QR សម្រាប់ឡាននីមួយៗ', 'Print a QR sticker for each truck')}">🖨 QR</a>
         <button type="button" class="icon-btn round" id="rvRefresh" aria-label="${L('ទាញថ្មី', 'Refresh')}" title="${L('ទាញថ្មី', 'Refresh')}">↻</button>
       </div>
       <div class="seg" role="tablist">${FILTERS.map(([k, kh, en, fn]) => `
@@ -1264,6 +1421,7 @@
 
     $$('[data-filter]').forEach(b => b.onclick = () => { rv.filter = b.dataset.filter; renderReview(); });
     $('#rvRefresh').onclick = () => renderReview(true);
+    reviewBadge();
     $$('[data-toggle]').forEach(b => b.onclick = () => {
       const sec = b.parentElement, open = !sec.classList.contains('open');
       sec.classList.toggle('open', open);
@@ -1458,6 +1616,8 @@
   // ---------------- Boot ----------------
 
   if (DEMO) $('#demoBanner').hidden = false;
+  // Keeps the whole site on the phone so it opens at once, even offline (see ../sw.js).
+  if ('serviceWorker' in navigator) navigator.serviceWorker.register('../sw.js').catch(() => {});
   const saved = storeGet(TOKEN_KEY);
   if (!DEMO && tokenValid(saved)) { state.token = saved; start(); }
   else renderLogin(false);

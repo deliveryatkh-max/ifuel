@@ -104,3 +104,30 @@ main { max-width: 1080px; margin: 0 auto; padding: 18px 16px 32px; }
 .lang-btn { width: auto; gap: 4px; padding: 0 7px; }
 .lang-btn img { width: 22px; height: 15px; border-radius: 3px; object-fit: cover; opacity: .4; filter: grayscale(.7); transition: opacity .12s, filter .12s; }
 .lang-btn img.on { opacity: 1; filter: none; box-shadow: 0 0 0 1.5px #fff; }
+
+/* Status under STEEL: green when the site is kept on the phone, amber when there is no internet. */
+.brand .net { display: flex; align-items: center; gap: 5px; font-size: 11.5px; color: #8fe0b0; white-space: nowrap; }
+.brand .net::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.brand .net.off { color: #ffc46b; }
+
+/* Install banner. */
+.install {
+  display: flex; align-items: center; gap: 12px; width: min(1048px, calc(100% - 32px)); margin: 16px auto 0;
+  padding: 12px 10px 12px 14px; background: var(--card); border: 1.5px solid var(--accent); border-radius: 18px; box-shadow: var(--shadow);
+}
+.install img { flex: none; border-radius: 50%; background: #fff; }
+.install .txt { flex: 1; min-width: 0; line-height: 1.3; }
+.install .txt b { display: block; font-size: 15px; }
+.install .txt small { font-size: 12.5px; margin-top: 2px; }
+.install .share { vertical-align: -2px; }
+.install .btn { margin: 0; flex: none; }
+.install .x { flex: none; width: 32px; height: 32px; border: 0; background: none; color: var(--muted); cursor: pointer; border-radius: 8px; font-size: 15px; }
+.install .x:hover { background: var(--soft); }
+
+/* Waiting-for-review count on a tile (reviewers only). */
+.tile .count {
+  position: absolute; top: 12px; right: 12px; min-width: 26px; height: 26px; padding: 0 7px; border-radius: 99px;
+  display: inline-flex; align-items: center; justify-content: center; background: #d93025; color: #fff; font-size: 13px; font-weight: 700;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; box-shadow: 0 0 0 2px var(--card);
+}
+.tile .wait { font-size: 12.5px; font-weight: 600; color: var(--bad); margin-top: -4px; }

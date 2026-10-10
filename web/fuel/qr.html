@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="km">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>QR stickers · STEEL</title>
+  <link rel="icon" type="image/png" href="../icons/favicon.png">
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Khmer:wght@400;700&display=swap" rel="stylesheet">
+  <style>
+    /* One sticker per truck: scanning it opens the Fuel app with that truck and its driver filled in. */
+    :root { --ink: #011e41; --muted: #546274; --line: #c9d4e2; --bg: #f3f6fa; --card: #fff; --brand: #084f6a; }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.4 "Noto Sans Khmer", system-ui, sans-serif; }
+    .bar { position: sticky; top: 0; z-index: 2; display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 12px 16px; background: #011e41; color: #fff; }
+    .bar b { font-size: 17px; margin-right: auto; }
+    .bar a, .bar button { font: inherit; color: #fff; background: rgba(255,255,255,.12); border: 1px solid rgba(255,255,255,.3); border-radius: 10px; padding: 7px 12px; text-decoration: none; cursor: pointer; }
+    .bar input { font: inherit; padding: 7px 10px; border-radius: 10px; border: 0; width: 150px; }
+    #msg { padding: 16px; color: var(--muted); }
+    .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 14px; padding: 16px; max-width: 1100px; margin: 0 auto; }
+    .stk { background: var(--card); border: 2px dashed var(--line); border-radius: 14px; padding: 12px 10px 10px; text-align: center; break-inside: avoid; }
+    .stk svg { width: 100%; max-width: 170px; height: auto; display: block; margin: 0 auto; }
+    .stk .pl { font-size: 26px; font-weight: 700; letter-spacing: .5px; margin-top: 4px; font-family: system-ui, sans-serif; }
+    .stk .dr { font-size: 12px; color: var(--muted); min-height: 1.4em; }
+    .stk .go { font-size: 12px; color: var(--brand); font-weight: 700; margin-top: 2px; }
+    @media print {
+      @page { size: A4; margin: 10mm; }
+      body { background: #fff; }
+      .bar, #msg { display: none; }
+      .grid { grid-template-columns: repeat(3, 1fr); gap: 6mm; padding: 0; }
+      .stk { border-color: #999; }
+    }
+  </style>
+</head>
+<body>
+  <div class="bar">
+    <b>🖨 QR ឡាន · Truck QR stickers</b>
+    <input id="q" type="search" placeholder="ស្វែងរក / Search">
+    <button type="button" id="print">បោះពុម្ព / Print</button>
+    <a href="./">← ចាក់សាំង</a>
+  </div>
+  <div id="msg">កំពុងទាញទិន្នន័យ… / Loading…</div>
+  <div class="grid" id="grid"></div>
+
+  <script src="../config.js"></script>
+  <script src="../vendor/qrcode.min.js"></script>
+  <script>
+  (function () {
+    'use strict';
+    const CFG = window.APP_CONFIG || {};
+    const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    const token = (() => { try { return localStorage.getItem('fr_id_token'); } catch (e) { return null; } })();
+    const base = location.origin + location.pathname.replace(/qr\.html$/, '');
+    let cfg = null;
+
+    function svgFor(text) {
+      const qr = window.qrcode(0, 'M');
+      qr.addData(text); qr.make();
+      return qr.createSvgTag({ cellSize: 4, margin: 2, scalable: true });
+    }
+    function draw() {
+      const q = document.getElementById('q').value.trim().toUpperCase();
+      const plates = (cfg.plates || []).filter(p => !q || p.toUpperCase().includes(q));
+      document.getElementById('grid').innerHTML = plates.map(p => {
+        const drivers = (cfg.drivers || []).filter(d => d.plate === p).map(d => d.name).join(', ');
+        return `<div class="stk">${svgFor(base + '?plate=' + encodeURIComponent(p))}
+          <div class="pl">${esc(p)}</div><div class="dr">${esc(drivers)}</div>
+          <div class="go">⛽ ស្កេនដើម្បីចាក់សាំង · Scan to refill</div></div>`;
+      }).join('');
+      document.getElementById('msg').textContent = plates.length + ' ឡាន / trucks';
+    }
+    async function load() {
+      if (!CFG.API_URL) { cfg = window.DEMO_DATA || { plates: ['3F-5849', '3C-4266'], drivers: [] }; return draw(); }
+      if (!token) { document.getElementById('msg').textContent = 'សូមចូលក្នុងកម្មវិធីចាក់សាំងជាមុន / Please sign in to the Fuel app first.'; return; }
+      try {
+        const res = await fetch(CFG.API_URL, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify({ action: 'config', token, payload: {} }) });
+        const data = await res.json();
+        if (!data.ok) throw new Error(String(data.error).replace(/^(AUTH|NOACCESS):\s*/, ''));
+        if (data.session) try { localStorage.setItem('fr_id_token', data.session); } catch (e) { /* ignore */ }
+        cfg = data.data; draw();
+      } catch (e) { document.getElementById('msg').textContent = e.message; }
+    }
+    document.getElementById('q').oninput = () => cfg && draw();
+    document.getElementById('print').onclick = () => window.print();
+    load();
+  })();
+  </script>
+</body>
+</html>

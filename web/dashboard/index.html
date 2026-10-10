@@ -6,6 +6,7 @@
   <meta name="theme-color" content="#011e41">
   <title>Fuel Dashboard</title>
   <link rel="icon" type="image/png" href="../icons/favicon.png">
+  <link rel="manifest" href="../manifest.webmanifest">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Khmer:wght@400;600;700&display=swap" rel="stylesheet">
@@ -20,10 +21,13 @@
   </script>
   <!-- API_URL and GOOGLE_CLIENT_ID come from the Fuel Refill app's own config.js (one folder up). -->
   <script src="../config.js"></script>
-  <script defer src="https://cdn.jsdelivr.net/npm/react@18.3.1/umd/react.production.min.js"></script>
-  <script defer src="https://cdn.jsdelivr.net/npm/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
-  <script defer src="https://cdn.jsdelivr.net/npm/prop-types@15.8.1/prop-types.min.js"></script>
-  <script defer src="https://cdn.jsdelivr.net/npm/recharts@2.12.7/umd/Recharts.js"></script>
+  <!-- Keeps the whole site on the phone so it opens at once, even offline (see ../sw.js). -->
+  <script>if ('serviceWorker' in navigator) navigator.serviceWorker.register('../sw.js').catch(function () {});</script>
+  <!-- React, ReactDOM, PropTypes and Recharts are served from this site (vendor/), so no outside server can block them. -->
+  <script defer src="./vendor/react.production.min.js"></script>
+  <script defer src="./vendor/react-dom.production.min.js"></script>
+  <script defer src="./vendor/prop-types.min.js"></script>
+  <script defer src="./vendor/Recharts.js"></script>
   <script type="module" crossorigin src="./assets/dashboard.js"></script>
   <link rel="stylesheet" crossorigin href="./assets/dashboard.css">
 </head>

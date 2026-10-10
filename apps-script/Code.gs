@@ -116,10 +116,17 @@ function canUse_(user, key) {
 }
 
 function homeApps_(p, user) {
-  return {
+  ensureRecapTrigger_();
+  const out = {
     user: { name: user.name, role: user.role },
     apps: HOME_APPS.map(a => a.key).filter(k => canUse_(user, k)),
   };
+  // Reviewers see how many entries wait for them on the Fuel Refill tile.
+  if (isReviewer_(user) && canUse_(user, 'fuel')) {
+    const n = pendingCount_();
+    if (n) out.badges = { fuel: n };
+  }
+  return out;
 }
 
 /**
@@ -324,6 +331,7 @@ function getConfig_(payload, user) {
     equipment: equipmentByType_(),
     litreLimit: Number(getSetting_('LITRE_LIMIT')) || 250,
     lastReadings: lastReadings_(),
+    pendingCount: isReviewer_(user) ? pendingCount_() : undefined,
   };
 }
 
@@ -368,6 +376,7 @@ function submitRefill_(p, user) {
     set(COL.SIGNATURE, savePhoto_(p.signature, id, 'signature'));
 
     sheet.appendRow(values);
+    pendingChanged_();
     if (ref) {
       refs[ref] = id;
       const keys = Object.keys(refs);
@@ -385,7 +394,7 @@ function submitRefill_(p, user) {
     // Posted straight away (a few seconds), using the photos already in hand. Google's timed triggers can
     // take minutes to run, so the queue + trigger is only the fallback when Telegram fails.
     if (tgPost) {
-      try { postRefillToTelegram_(tgPost); }
+      try { alertUnusual_(tgPost, allRefills_(), postRefillToTelegram_(tgPost)); }
       catch (e) { console.error('Telegram post failed for ' + tgPost.id + ': ' + e); queueTelegram_(tgPost.id); }
     }
   }
@@ -457,6 +466,7 @@ function reviewRefill_(p, user) {
     sheet.getRange(rowNum, cols[COL.STATUS] + 1).setValue(p.status);
     sheet.getRange(rowNum, cols[COL.REVIEWED_BY] + 1).setValue(user.email);
     sheet.getRange(rowNum, cols[COL.REVIEWED_AT] + 1).setValue(new Date());
+    pendingChanged_();
     if (p.note) {
       const cell = sheet.getRange(rowNum, cols[COL.NOTE] + 1);
       const old = String(cell.getValue() || '');
@@ -513,6 +523,13 @@ const DASH_FIELDS = [
 
 function dashboardData_(p, user) {
   if (!canUse_(user, 'dashboard')) throw new Error('NOACCESS: Only users with Dashboard ticked in the Users sheet can open the dashboard.');
+  const raw = dashboardRaw_();
+  raw.user = { name: user.name, role: user.role };
+  return raw;
+}
+
+/** Everything the dashboard reads (also used for the Telegram monthly recap). */
+function dashboardRaw_() {
   const sheet = refillSheet_();
   const values = sheet.getDataRange().getValues();
   const header = values.shift().map(h => String(h).trim());
@@ -553,7 +570,6 @@ function dashboardData_(p, user) {
     })).filter(d => d.label || d.name),
     brokenPlates: driverTruck_().brokenPlates,
     settings: dashSettings_(),
-    user: { name: user.name, role: user.role },
     generatedAt: Date.now(),
   };
 }
@@ -691,7 +707,7 @@ function sendTelegramQueue() {
     const r = rows.find(x => x.id === item.id);
     if (!r) return;
     try {
-      postRefillToTelegram_(r);
+      alertUnusual_(r, rows, postRefillToTelegram_(r));
     } catch (e) {
       console.error('Telegram post failed for ' + item.id + ': ' + e);
       if (item.tries < 3) retry.push({ id: item.id, tries: item.tries + 1 });
@@ -788,6 +804,186 @@ function telegram_(method, payload) {
     return telegram_(method, payload);
   }
   throw new Error('Telegram ' + method + ': ' + (body.description || 'HTTP ' + res.getResponseCode()));
+}
+
+// ---------- Waiting for review ----------
+// Count of entries with no Review Status, for the reviewer badges. Kept for a minute so the
+// home menu stays fast; a new entry or a review clears it straight away.
+const PENDING_CACHE = 'PENDING_COUNT';
+
+function pendingCount_() {
+  const cache = CacheService.getScriptCache();
+  const hit = cache.get(PENDING_CACHE);
+  if (hit !== null) return Number(hit) || 0;
+  const sheet = refillSheet_();
+  const cols = headerIndex_(sheet);
+  const n = sheet.getLastRow() - 1;
+  if (n < 1 || cols[COL.STATUS] === undefined) return 0;
+  const ids = sheet.getRange(2, cols[COL.ID_FR] + 1, n, 1).getValues();
+  const status = sheet.getRange(2, cols[COL.STATUS] + 1, n, 1).getValues();
+  let count = 0;
+  ids.forEach((r, i) => { if (r[0] !== '' && String(status[i][0]).trim() === '') count++; });
+  cache.put(PENDING_CACHE, String(count), 60);
+  return count;
+}
+
+function pendingChanged_() {
+  try { CacheService.getScriptCache().remove(PENDING_CACHE); } catch (e) { /* the count catches up within a minute */ }
+}
+
+// ---------- Unusual refill alerts (Telegram) ----------
+// Sent as a reply under the new entry's post when a refill looks out of the ordinary:
+//  · litres well above that truck's usual refill (1.5 × the median of its last 10, and at least 20 L more),
+//  · a second refill for the same plate on the same day,
+//  · km since the last refill above the dashboard's "Maximum km between refills" (Settings, default 2,000).
+// Worded "Requires Investigation": it never says anyone did something wrong.
+// Turn off by setting TELEGRAM_ALERTS = No in the Settings sheet.
+const ALERT_LITRES_X = 1.5;
+
+function median_(list) {
+  const a = list.slice().sort((x, y) => x - y);
+  const m = Math.floor(a.length / 2);
+  return a.length % 2 ? a[m] : (a[m - 1] + a[m]) / 2;
+}
+
+/** What is unusual about entry r, compared with the earlier entries of the same plate. */
+function unusualRefill_(r, rows) {
+  const out = { usual: null, sameDay: 0, kmGap: null };
+  if (!r.plate || !r.dateTime) return out;
+  const tz = Session.getScriptTimeZone();
+  const day = t => Utilities.formatDate(new Date(t), tz, 'yyyy-MM-dd');
+  const before = rows
+    .filter(x => x.id !== r.id && x.plate === r.plate && x.type === r.type && x.status !== STATUS_BAD && x.dateTime && x.dateTime < r.dateTime)
+    .sort((a, b) => b.dateTime - a.dateTime);
+
+  const recent = before.filter(x => x.litres > 0).slice(0, 10).map(x => x.litres);
+  if (recent.length >= 3) {
+    const usual = median_(recent);
+    if (r.litres > usual * ALERT_LITRES_X && r.litres - usual >= 20) out.usual = usual;
+  }
+  out.sameDay = before.filter(x => day(x.dateTime) === day(r.dateTime)).length;
+
+  const broken = driverTruck_().brokenPlates.indexOf(r.plate) >= 0;
+  const last = before.find(x => x.km > 1);
+  if (r.km > 1 && last && !broken) {
+    const maxJump = Number((dashSettings_() || {}).maxJumpKm) || 2000;
+    if (r.km - last.km > maxJump) out.kmGap = r.km - last.km;
+  }
+  return out;
+}
+
+/** Posts the alert when something is unusual. replyTo: what Telegram returned for the entry's own post. */
+function alertUnusual_(r, rows, replyTo) {
+  try {
+    if (!telegramReady_() || isNo_(getSetting_('TELEGRAM_ALERTS'))) return;
+    const u = unusualRefill_(r, rows);
+    if (u.usual === null && !u.sameDay && u.kmGap === null) return;
+    const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const num = n => Number(n).toLocaleString('en-US', { maximumFractionDigits: 0 });
+    const lines = [
+      '⚠️ <b>ការចាក់ខុសធម្មតា · Unusual refill</b>',
+      '🚚 <b>' + esc(r.plate) + '</b> · ' + esc(r.driver),
+      '⛽ <b>' + num(r.litres) + ' L</b>' + (u.usual !== null ? ' (ធម្មតា / usual ~' + num(u.usual) + ' L)' : ''),
+    ];
+    if (u.sameDay) lines.push('🔁 ចាក់លើកទី ' + (u.sameDay + 1) + ' នៅថ្ងៃនេះ / refill no. ' + (u.sameDay + 1) + ' today');
+    if (u.kmGap !== null) lines.push('📏 ' + num(u.kmGap) + ' km ពីលើកមុន / since the last refill');
+    lines.push('👉 Requires Investigation · <a href="' + appUrl_() + '/dashboard/">Dashboard</a>');
+    lines.push('🆔 <code>' + esc(r.id) + '</code>');
+    const first = Array.isArray(replyTo) ? replyTo[0] : replyTo;
+    const payload = { chat_id: getSetting_('TELEGRAM_CHAT_ID'), text: lines.join('\n'), parse_mode: 'HTML', disable_web_page_preview: true };
+    if (first && first.message_id) payload.reply_parameters = JSON.stringify({ message_id: first.message_id, allow_sending_without_reply: true });
+    telegram_('sendMessage', payload);
+  } catch (e) {
+    console.error('Unusual refill alert failed for ' + r.id + ': ' + e);   // never blocks the entry's own post
+  }
+}
+
+function appUrl_() {
+  return (getSetting_('APP_URL') || 'https://isteel-app.pages.dev').replace(/\/+$/, '');
+}
+
+// ---------- Monthly recap (Telegram) ----------
+// On the 1st of each month at about 08:00, last month's figures go to the group. The numbers come from
+// the dashboard's own engine (FuelEngine at the end of this file), so they match the dashboard.
+// The timer is created automatically the first time someone opens the home menu after this update.
+// Turn off by setting TELEGRAM_RECAP = No in the Settings sheet. To try it now, run telegramSendRecap.
+const RECAP_HANDLER = 'sendMonthlyRecap';
+const MONTHS_KM = ['មករា', 'កុម្ភៈ', 'មីនា', 'មេសា', 'ឧសភា', 'មិថុនា', 'កក្កដា', 'សីហា', 'កញ្ញា', 'តុលា', 'វិច្ឆិកា', 'ធ្នូ'];
+const MONTHS_EN = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+
+function ensureRecapTrigger_() {
+  const props = PropertiesService.getScriptProperties();
+  if (props.getProperty('RECAP_TRIGGER')) return;
+  if (Date.now() - (Number(props.getProperty('RECAP_TRIGGER_TRIED')) || 0) < 24 * 3600 * 1000) return;   // failed: try again tomorrow
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(5000)) return;
+  try {
+    if (props.getProperty('RECAP_TRIGGER')) return;
+    if (!ScriptApp.getProjectTriggers().some(t => t.getHandlerFunction() === RECAP_HANDLER)) {
+      ScriptApp.newTrigger(RECAP_HANDLER).timeBased().onMonthDay(1).atHour(8).create();
+    }
+    props.setProperty('RECAP_TRIGGER', String(Date.now()));
+  } catch (e) {
+    props.setProperty('RECAP_TRIGGER_TRIED', String(Date.now()));
+    console.error('Monthly recap timer not created: ' + e);
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/** Run by the monthly timer: sends last month's recap. */
+function sendMonthlyRecap() {
+  if (!telegramReady_() || isNo_(getSetting_('TELEGRAM_RECAP'))) return;
+  const now = new Date();
+  const recap = FuelEngine.monthlyRecap(dashboardRaw_(), now.getFullYear(), now.getMonth() - 1);
+  telegram_('sendMessage', { chat_id: getSetting_('TELEGRAM_CHAT_ID'), text: recapText_(recap), parse_mode: 'HTML', disable_web_page_preview: true });
+}
+
+/** Run from the editor to send last month's recap now (to try it). */
+function telegramSendRecap() {
+  if (!telegramReady_()) throw new Error('Telegram is not connected yet: run telegramConnect first.');
+  sendMonthlyRecap();
+}
+
+function recapText_(r) {
+  const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const n0 = n => Number(n).toLocaleString('en-US', { maximumFractionDigits: 0 });
+  const n1 = n => Number(n).toLocaleString('en-US', { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+  const prevName = MONTHS_EN[(r.month + 11) % 12];
+  const lines = ['🏆 <b>សង្ខេបប្រចាំខែ' + MONTHS_KM[r.month] + ' · ' + MONTHS_EN[r.month] + ' ' + r.year + ' recap</b>', ''];
+  lines.push('⛽ <b>' + n0(r.litres) + ' L</b>' + (r.spent !== null ? ' · <b>' + esc(r.currency) + n0(r.spent) + '</b>' : '') + ' · ' + n0(r.refills) + ' refills');
+  if (r.prevLitres > 0) {
+    const d = (r.litres / r.prevLitres - 1) * 100;
+    lines.push('    ' + (Math.abs(d) < 1 ? 'about the same as ' : (d > 0 ? '▲ ' : '▼ ') + n0(Math.abs(d)) + '% vs ') + prevName);
+  }
+  if (r.l100 !== null) {
+    let line = '📈 <b>' + n1(r.l100) + ' L/100 km</b>';
+    if (r.prevL100) {
+      const d = (r.l100 / r.prevL100 - 1) * 100;
+      line += ' (' + (Math.abs(d) < 1 ? 'same as ' : (d > 0 ? '▲ ' : '▼ ') + n0(Math.abs(d)) + '% vs ') + prevName + ')';
+    }
+    lines.push(line);
+  }
+  if (r.budget > 0 && r.spent !== null) {
+    const diff = r.spent - r.budget;
+    lines.push('💰 Budget ' + esc(r.currency) + n0(r.budget) + ': ' + (diff > 0 ? '▲ ' + esc(r.currency) + n0(diff) + ' over' : '▼ ' + esc(r.currency) + n0(-diff) + ' under'));
+  }
+  lines.push('');
+  if (r.savers.length) {
+    lines.push('<b>Fuel Saver of the Month</b>');
+    const medals = ['🥇', '🥈', '🥉'];
+    r.savers.forEach((s, i) => lines.push(medals[i] + ' ' + esc(s.driver) + ' · ' + n1(s.l100) + ' L/100 km'));
+    lines.push('');
+  }
+  lines.push('⭐ Complete Data: <b>' + n0(r.clean) + '</b> ' + (r.clean === 1 ? 'driver' : 'drivers') + ' with no data problems');
+  if (r.investigate.length) {
+    lines.push('🔎 Requires Investigation: ' + r.investigate.length + ' ' + (r.investigate.length === 1 ? 'vehicle' : 'vehicles')
+      + ' (' + esc(r.investigate.slice(0, 5).join(', ')) + (r.investigate.length > 5 ? ' …' : '') + ')');
+  }
+  if (r.pending) lines.push('🧾 ' + n0(r.pending) + ' refills still waiting for review (not counted yet)');
+  lines.push('🎉 អរគុណ! Thank you all!');
+  lines.push('👉 <a href="' + appUrl_() + '/dashboard/">Dashboard</a>');
+  return lines.join('\n');
 }
 
 /**
@@ -1249,6 +1445,11 @@ function isYes_(v) {
   return s === 'yes' || s === 'true' || s === 'y' || s === '1';
 }
 
+function isNo_(v) {
+  const s = String(v).trim().toLowerCase();
+  return s === 'no' || s === 'false' || s === 'n' || s === '0' || s === 'off';
+}
+
 function json_(obj) {
   return ContentService.createTextOutput(JSON.stringify(obj)).setMimeType(ContentService.MimeType.JSON);
 }
@@ -1260,3 +1461,7 @@ function setup() {
   Logger.log('Photo folder: ' + folder.getUrl());
   Logger.log('Client ID set: ' + (getSetting_('GOOGLE_CLIENT_ID') ? 'yes' : 'NO - fill it in the Settings sheet'));
 }
+
+// ==== BEGIN FuelEngine (generated from the dashboard's engine.ts + recap.ts by "npm run engine": do not edit by hand) ====
+"use strict";var FuelEngine=(()=>{var U=Object.defineProperty;var le=Object.getOwnPropertyDescriptor;var oe=Object.getOwnPropertyNames;var ue=Object.prototype.hasOwnProperty;var ae=(t,r)=>{for(var n in r)U(t,n,{get:r[n],enumerable:!0})},ce=(t,r,n,i)=>{if(r&&typeof r=="object"||typeof r=="function")for(let l of oe(r))!ue.call(t,l)&&l!==n&&U(t,l,{get:()=>r[l],enumerable:!(i=le(r,l))||i.enumerable});return t};var me=t=>ce(U({},"__esModule",{value:!0}),t);var ye={};ae(ye,{cleanDrivers:()=>ie,monthStart:()=>Y,monthView:()=>q,monthlyRecap:()=>ve,savers:()=>se});var pe="\u178F\u17D2\u179A\u17B9\u1798\u178F\u17D2\u179A\u17BC\u179C",ge="\u1798\u17B7\u1793\u178F\u17D2\u179A\u17B9\u1798\u178F\u17D2\u179A\u17BC\u179C";var J={minReadingKm:1e3,placeholders:[0,1,100,123,150,200,1234,12345,123455,123456,111111,999999],maxJumpKm:2e3,maxJumpHour:500,minStretches:3,minKm:1e3,investigatePct:20,fuelPrice:0,currency:"$",fuelPrices:[],monthlyBudget:0,defaultType:"Truck",vehicleTypes:[{name:"Truck",target:null,inFleet:!0},{name:"Motorbike",target:null,inFleet:!1}],plateType:{"1HS-1800":"Motorbike","1IG-9159":"Motorbike","1JQ-2735":"Motorbike","1LU-5135":"Motorbike"}};function ee(t){let r={...J,...t||{}};return(!Array.isArray(r.vehicleTypes)||!r.vehicleTypes.length)&&(r.vehicleTypes=J.vehicleTypes),(!r.plateType||typeof r.plateType!="object")&&(r.plateType={}),Array.isArray(r.placeholders)||(r.placeholders=J.placeholders),Array.isArray(r.fuelPrices)||(r.fuelPrices=[]),r.fuelPrices=r.fuelPrices.filter(n=>n&&/^\d{4}-\d{2}-\d{2}$/.test(n.from)&&n.price>0).sort((n,i)=>n.from.localeCompare(i.from)),r}var z=t=>t.fuelPrice>0||t.fuelPrices.length>0;function de(t,r){if(!t.fuelPrices.length)return t.fuelPrice;let n=new Date(r),i=`${n.getFullYear()}-${String(n.getMonth()+1).padStart(2,"0")}-${String(n.getDate()).padStart(2,"0")}`,l=t.fuelPrices[0].price;for(let c of t.fuelPrices)if(c.from<=i)l=c.price;else break;return l}var V="(mixed drivers)",E="(no plate)",te="\u17E0\u17E1\u17E2\u17E3\u17E4\u17E5\u17E6\u17E7\u17E8\u17E9";function G(t){if(t==null||t==="")return null;if(typeof t=="number")return isFinite(t)?t:null;let r=String(t).replace(/[០-៩]/g,i=>String(te.indexOf(i))).replace(/,/g,"").trim();if(!r)return null;let n=Number(r);return isFinite(n)?n:null}var R=t=>(t==null?"":String(t)).trim(),W=t=>{let r=R(t);return r.startsWith("d:")?`https://drive.google.com/file/d/${r.slice(2)}/view`:r},Q=t=>t.replace(/[០-៩]/g,r=>String(te.indexOf(r)));function fe(t,r){let n=r.find(l=>l.name===t),i=n?n.meter:"";return i==="km"?"km":i==="hour"?"hour":n?"none":/🚚|ឡាន/.test(t)?"km":"none"}function be(t){var i;let r=new Map,n=new Map;for(let l of t){let c=l.label||l.name,u=Q(c).match(/^0*(\d+)\s*\.\s*(.+)$/),d=(l.name||(u?u[2]:c)).trim();r.set(d,c),r.set(c,c);let b=(i=G(l.no))!=null?i:u?Number(u[1]):null;b!==null&&n.set(b,c)}return l=>{let c=Q(l).replace(/\s+/g," ").trim();if(!c)return{name:"(no driver)",known:!1};if(r.has(c))return{name:r.get(c),known:!0};let u=c.match(/^0*(\d+)\s*[.\-]?\s*(.*)$/);return u&&u[2]&&r.has(u[2].trim())?{name:r.get(u[2].trim()),known:!0}:u&&!u[2]&&n.has(Number(u[1]))?{name:n.get(Number(u[1])),known:!0}:{name:u&&u[2]?u[2].trim():c,known:!1}}}function re(t,r){let n=o=>t.columns.indexOf(o),i={id:n("id"),type:n("type"),plate:n("plate"),driver:n("driver"),km:n("km"),litres:n("litres"),t:n("dateTime"),status:n("status"),user:n("user"),hour:n("hour"),note:n("note"),odo:n("odoPhoto"),pump:n("pumpPhoto"),hourPhoto:n("hourPhoto")},l=(o,p)=>p<0?"":o[p],c=be(t.drivers||[]),u={},d=[],b=[],S=[],K=new Set((t.brokenPlates||[]).map(o=>String(o).trim().toUpperCase()).filter(Boolean)),N=0,F=0;for(let o of t.rows){let p=R(l(o,i.status));if(p!==pe){p===ge?F++:N++;continue}let m=R(l(o,i.type));m in u||(u[m]=fe(m,t.types||[]));let P=l(o,i.t),g=typeof P=="number"?P:P?Date.parse(String(P)):NaN;if(!isFinite(g))continue;let v=c(R(l(o,i.driver))),f=R(l(o,i.plate)).replace(/\s+/g," "),h={id:R(l(o,i.id)),type:m,meter:u[m],plate:f?/^[0-9A-Za-z-]+$/.test(f)?f.toUpperCase():f:E,driverRaw:R(l(o,i.driver)),driver:v.name,km:G(l(o,i.km)),hour:G(l(o,i.hour)),litres:G(l(o,i.litres))||0,t:g,status:p,user:R(l(o,i.user)),note:R(l(o,i.note)),odoPhoto:W(l(o,i.odo)),pumpPhoto:W(l(o,i.pump)),hourPhoto:W(l(o,i.hourPhoto)),dup:!1,role:""};d.push(h),!f&&h.meter!=="none"&&b.push({rec:h,kind:"noPlate",detail:"Plate is empty"}),!v.known&&h.driverRaw&&b.push({rec:h,kind:"unknownDriver",detail:h.driverRaw})}d.sort((o,p)=>o.t-p.t);let I=new Map;for(let o of d){if(o.meter==="none"||o.plate===E)continue;let p=I.get(o.plate);p||I.set(o.plate,p=[]),p.push(o)}let D=[],$=new Set(r.placeholders);for(let[o,p]of I){let m=p[0].meter==="hour"?"hour":"km",P=m==="km"?r.maxJumpKm:r.maxJumpHour,g=null,v=0,f=null,h=0,T=null;for(let a of p){let k=m==="km"?a.km:a.hour;if(T&&a.t-T.t<108e5&&a.litres===T.litres&&(m==="km"?a.km:a.hour)===(m==="km"?T.km:T.hour)&&k!==null){a.dup=!0,b.push({rec:a,kind:"duplicate",detail:`Same reading and litres as ${T.id}`});continue}if(T=a,m==="km"&&K.has(o)){a.role="invalid",S.push({rec:a,kind:"broken",detail:"Marked in Driver & Truck"});continue}let y=null,x="";if(k===null){if(m==="hour"){v+=a.litres,h+=a.litres,a.role="invalid";continue}if(/^\s*(កុងទ័រខូច|Odometer broken)/i.test(a.note)){a.role="invalid",v+=a.litres,h+=a.litres,S.push({rec:a,kind:"broken",detail:"Ticked in the app"});continue}y="missing"}else if(m==="km"&&($.has(k)||k<r.minReadingKm))y="placeholder",x=`Km ${k}`;else if(g){let w=m==="km"?g.km:g.hour;k<w?(y="lower",x=`${C(k)} after ${C(w)}`):k===w?(y="zero",x=`${C(k)} again`):k-w>P&&(y="jump",x=`+${C(k-w)} ${m} since ${C(w)}`)}if(y==="lower"||y==="jump"){let w=f?m==="km"?f.km:f.hour:null;f&&w!==null&&k>w&&k-w<=P?(g=f,g.role="start",v=h,f=null,y=null):(f=a,h=0)}if(y){a.role="invalid",m==="hour"&&y==="zero"||b.push({rec:a,kind:y,detail:x}),v+=a.litres,a!==f&&(h+=a.litres);continue}if(!g){g=a,a.role="start",v=0;continue}let _=m==="km"?g.km:g.hour;D.push({plate:o,meter:m,from:g,to:a,dist:k-_,litres:a.litres+v,carried:v,t:a.t,driver:g.driver===a.driver?a.driver:V}),a.role="stretch",g=a,v=0,f=null,h=0}}D.sort((o,p)=>o.t-p.t);let O=o=>[...new Set(o)].sort((p,m)=>p.localeCompare(m));return{records:d,stretches:D,issues:b,broken:S,brokenPlates:K,pendingCount:N,rejectedCount:F,typeMeter:u,plates:O(d.filter(o=>o.plate!==E).map(o=>o.plate)),drivers:O(d.map(o=>o.driver)),types:O(d.map(o=>o.type)),minT:d.length?d[0].t:0,maxT:d.length?d[d.length-1].t:0}}function C(t){return Math.round(t*10)/10+""}var H={from:null,to:null,type:"",plate:"",driver:"",vtype:""};function he(t,r){let n=r.plateType[t]||r.defaultType;return r.vehicleTypes.find(i=>i.name===n)||{name:n,target:null,inFleet:!0}}var j=(t,r)=>(r.from===null||t>=r.from)&&(r.to===null||t<=r.to);function ke(t){let r=new Date(t),n=(r.getDay()+6)%7;return r.setHours(0,0,0,0),r.setDate(r.getDate()-n),r.getTime()}function ne(t,r,n){let i=new Map,l=e=>{let s=i.get(e);return s||i.set(e,s=he(e,r)),s},c=e=>!e.dup&&j(e.t,n)&&(!n.type||e.type===n.type)&&(!n.plate||e.plate===n.plate)&&(!n.driver||e.driver===n.driver)&&(!n.vtype||e.meter==="km"&&l(e.plate).name===n.vtype),u=t.records.filter(c),d=t.stretches.filter(e=>j(e.t,n)&&(!n.type||e.to.type===n.type)&&(!n.plate||e.plate===n.plate)&&(!n.driver||e.driver===n.driver)&&(!n.vtype||l(e.plate).name===n.vtype)),b=e=>j(e.rec.t,n)&&(!n.type||e.rec.type===n.type)&&(!n.plate||e.rec.plate===n.plate)&&(!n.driver||e.rec.driver===n.driver),S=t.issues.filter(b),K=t.broken.filter(b),N=d.filter(e=>e.meter==="km"),F=N.filter(e=>l(e.plate).inFleet),I=A(F,e=>e.dist),D=A(F,e=>e.litres),$=I>0&&D>0?D/I*100:null,O=u.filter(e=>e.meter==="km"&&l(e.plate).inFleet&&!t.brokenPlates.has(e.plate)),o=A(O,e=>e.litres),p=new Map;for(let e of S)p.set(e.rec.plate,(p.get(e.rec.plate)||0)+1);let m=e=>{let s=l(e).target;return s&&s>0?{ref:s,isTarget:!0}:{ref:$,isTarget:!1}},P=new Map,g=(e,s,M)=>{let L=e.get(s);return L||e.set(s,L={key:s,refills:0,litres:0,stretches:0,dist:0,sLitres:0,l100:null,kmL:null,ref:null,refIsTarget:!1,gapPct:null,enough:!1,status:"nodata",saving:0,issues:0,meterBroken:!1,vtype:M,last:0}),L};for(let e of u){if(e.meter!=="km")continue;let s=g(P,e.plate,l(e.plate).name);s.refills++,s.litres+=e.litres,s.last=Math.max(s.last,e.t)}for(let e of N){let s=g(P,e.plate,l(e.plate).name);s.stretches++,s.dist+=e.dist,s.sLitres+=e.litres}for(let e of P.values()){e.issues=p.get(e.key)||0,e.meterBroken=t.brokenPlates.has(e.key);let s=m(e.key);Z(e,s.ref,s.isTarget,r)}let v=new Map,f=new Map;for(let e of u){let s=g(v,e.driver,"");s.refills++,s.litres+=e.litres,s.last=Math.max(s.last,e.t)}for(let e of F){if(e.driver===V)continue;let s=g(v,e.driver,"");s.stretches++,s.dist+=e.dist,s.sLitres+=e.litres;let M=m(e.plate),L=f.get(e.driver)||{w:0,d:0,target:!0};M.ref!==null&&(L.w+=M.ref*e.dist,L.d+=e.dist),L.target=L.target&&M.isTarget,f.set(e.driver,L)}for(let e of v.values()){let s=f.get(e.key);Z(e,s&&s.d>0?s.w/s.d:null,!!(s&&s.target),r)}let h=new Map;for(let e of u){if(e.meter==="km")continue;let s=g(h,e.plate===E?e.type:e.plate,e.type);s.refills++,s.litres+=e.litres,s.last=Math.max(s.last,e.t)}for(let e of d){if(e.meter!=="hour")continue;let s=g(h,e.plate,e.to.type);s.stretches++,s.dist+=e.dist,s.sLitres+=e.litres}for(let e of h.values())e.l100=e.dist>0&&e.sLitres>0?e.sLitres/e.dist:null;let T=new Map,a=e=>{let s=ke(e),M=T.get(s);return M||T.set(s,M={week:s,litres:0,dist:0,sLitres:0,l100:null,refills:0}),M};for(let e of u){let s=a(e.t);s.litres+=e.litres,s.refills++}for(let e of F){let s=a(e.t);s.dist+=e.dist,s.sLitres+=e.litres}let k=[...T.values()].sort((e,s)=>e.week-s.week);for(let e of k)e.l100=e.dist>0&&e.sLitres>0?e.sLitres/e.dist*100:null;let y=new Map;for(let e of u){let s=y.get(e.type)||{type:e.type,litres:0,refills:0};s.litres+=e.litres,s.refills++,y.set(e.type,s)}let x=[...P.values()],_=[...v.values()],w=x.filter(e=>l(e.key).inFleet),B=A(u,e=>e.litres),X=z(r)?A(u,e=>e.litres*de(r,e.t)):0;return{records:u,stretches:d,issues:S,broken:K,litres:B,refills:u.length,kmLitres:o,spent:X,avgPrice:B>0?X/B:0,dist:I,sLitres:D,fleetL100:$,fleetKmL:$?100/$:null,coverage:o>0?Math.min(1,D/o):null,trucks:x,drivers:_,weeks:k,byType:[...y.values()].sort((e,s)=>s.litres-e.litres),equipment:[...h.values()].sort((e,s)=>s.litres-e.litres),savingLitres:A(w,e=>e.saving),investigate:w.filter(e=>e.status==="investigate").length}}function Z(t,r,n,i){t.l100=t.dist>0&&t.sLitres>0?t.sLitres/t.dist*100:null,t.kmL=t.l100?100/t.l100:null,t.ref=r,t.refIsTarget=n,t.enough=t.stretches>=i.minStretches&&t.dist>=i.minKm,t.gapPct=t.l100!==null&&r?(t.l100/r-1)*100:null,t.l100===null||!t.enough?t.status="nodata":t.gapPct!==null&&t.gapPct>i.investigatePct?t.status="investigate":t.gapPct!==null&&t.gapPct>0?t.status="above":t.status="ok",t.saving=t.enough&&r&&t.l100!==null&&t.l100>r?t.sLitres-t.dist*r/100:0}function A(t,r){let n=0;for(let i of t)n+=r(i);return n}function se(t){return t.drivers.filter(r=>r.key!==V&&r.enough&&r.l100!==null&&r.gapPct!==null&&r.gapPct<=0).sort((r,n)=>r.gapPct-n.gapPct).map(r=>{var l;let n=new Map;for(let c of t.stretches)c.driver===r.key&&n.set(c.plate,(n.get(c.plate)||0)+1);let i=((l=[...n.entries()].sort((c,u)=>u[1]-c[1])[0])==null?void 0:l[0])||"";return{driver:r.key,l100:r.l100,gapPct:r.gapPct,dist:r.dist,plate:i}})}function ie(t){let r=new Set(t.issues.map(n=>n.rec.driver));return new Set(t.records.map(n=>n.driver).filter(n=>n&&!r.has(n))).size}var Y=(t,r)=>new Date(t,r,1).getTime(),q=(t,r,n,i,l)=>ne(t,r,{...n,from:Y(i,l),to:Y(i,l+1)-1});function ve(t,r,n){let i=ee(t.settings),l=re(t,i),c=q(l,i,H,r,n),u=q(l,i,H,r,n-1),d=b=>{var S;return((S=i.vehicleTypes.find(K=>K.name===b))==null?void 0:S.inFleet)!==!1};return{year:new Date(r,n,1).getFullYear(),month:new Date(r,n,1).getMonth(),refills:c.refills,litres:c.litres,spent:z(i)?c.spent:null,currency:i.currency,l100:c.fleetL100,prevL100:u.fleetL100,prevLitres:u.litres,budget:i.monthlyBudget,savers:se(c).slice(0,3),clean:ie(c),investigate:c.trucks.filter(b=>d(b.vtype)&&b.status==="investigate").map(b=>b.key),pending:l.pendingCount}}return me(ye);})();
+// ==== END FuelEngine ====

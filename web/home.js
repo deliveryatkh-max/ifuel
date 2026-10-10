@@ -65,9 +65,13 @@
     $('#view').innerHTML = mine.length ? `
       <p class="hello">${t('សួស្តី', 'Hello')} <b>${esc(name)}</b> · ${t('ជ្រើសរើសកម្មវិធី', 'Choose an app')}</p>
       <div class="grid">${mine.map(a => {
+        // Reviewers see how many entries are waiting for them (sent by the server for reviewers only).
+        const wait = Number((d.badges || {})[a.key]) || 0;
         const inner = `<span class="ico"><img src="icons/${esc(a.key)}.svg" alt="" width="53" height="53"></span>
+          ${wait ? `<span class="count" aria-hidden="true">${wait > 99 ? '99+' : wait}</span>` : ''}
           <span class="t">${esc(t(a.kh, a.en))}</span>
-          ${a.url ? '' : `<span class="badge">${t('មកដល់ឆាប់ៗ', 'Coming soon')}</span>`}`;
+          ${a.url ? '' : `<span class="badge">${t('មកដល់ឆាប់ៗ', 'Coming soon')}</span>`}
+          ${wait ? `<span class="wait">${t('រង់ចាំពិនិត្យ', 'Waiting for review')} ${wait}</span>` : ''}`;
         return a.url ? `<a class="tile" href="${esc(a.url)}">${inner}</a>`
           : `<button type="button" class="tile soon" data-soon="${esc(t(a.kh, a.en))}">${inner}</button>`;
       }).join('')}</div>` : `
@@ -159,7 +163,7 @@
       else if (/Unknown action/i.test(e.message)) renderMenu({ user: { name: email() }, apps: ['fuel', 'dashboard'] });
       else if (e.code === 'NOACCESS') { set(key, null); renderError(e, true); }
       else if (!cached) renderError(e, false);
-      else toast(e.message);
+      else if (navigator.onLine !== false) toast(e.message);   // offline: the dot under STEEL already says so
     } finally {
       $('#bar').classList.remove('busy');
     }
@@ -181,7 +185,49 @@
   $('#outBtn').onclick = signOut;
   if (window.LANG) {
     LANG.button($('#langBtn'));
-    LANG.onChange(() => { paintLabels(); if (screen) screen(); });
+    LANG.onChange(() => { paintLabels(); paintNet(); paintInstall(); if (screen) screen(); });
+  }
+
+  // ---------- Install on the phone, and offline ----------
+  // The service worker (sw.js) keeps every screen on the phone, so the menu opens at once even on weak 4G.
+  const standalone = () => (window.matchMedia && matchMedia('(display-mode: standalone)').matches) || navigator.standalone === true;
+  const HIDE_KEY = 'steel_install_hide';
+  let installEvt = null;
+  function paintNet() {
+    const el = $('#net');
+    const off = navigator.onLine === false;
+    const ready = 'serviceWorker' in navigator && !!navigator.serviceWorker.controller;
+    el.hidden = !off && !ready;
+    el.classList.toggle('off', off);
+    el.textContent = off ? t('គ្មានអ៊ីនធឺណិត', 'Offline') : t('អាចប្រើក្រៅបណ្ដាញ', 'Works offline');
+  }
+  function paintInstall() {
+    const box = $('#install');
+    const hidden = Number(get(HIDE_KEY) || 0) > Date.now();
+    const ios = /iphone|ipad|ipod/i.test(navigator.userAgent) && !window.MSStream;
+    if (standalone() || hidden || (!installEvt && !ios)) { box.hidden = true; return; }
+    box.hidden = false;
+    box.innerHTML = `<img src="icons/isi-logo.png" alt="" width="44" height="44">
+      <div class="txt"><b>${t('ដំឡើង STEEL លើទូរស័ព្ទ', 'Install STEEL on your phone')}</b>
+        <small>${installEvt ? t('បើកលឿន ប្រើបានទោះអ៊ីនធឺណិតខ្សោយ', 'Opens fast, works on weak internet')
+          : t('ចុច Share <svg class="share" viewBox="0 0 24 24" width="15" height="15" aria-label="Share"><path d="M12 3v12M8 7l4-4 4 4M6 11H5v10h14V11h-1" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg> រួច “Add to Home Screen”', 'Tap Share <svg class="share" viewBox="0 0 24 24" width="15" height="15" aria-label="Share"><path d="M12 3v12M8 7l4-4 4 4M6 11H5v10h14V11h-1" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg> then “Add to Home Screen”')}</small></div>
+      ${installEvt ? `<button type="button" class="btn ok" id="installGo">${t('ដំឡើង', 'Install')}</button>` : ''}
+      <button type="button" class="x" id="installX" aria-label="${t('បិទ', 'Close')}">✕</button>`;
+    if ($('#installGo')) $('#installGo').onclick = async () => {
+      const ev = installEvt; installEvt = null; box.hidden = true;
+      ev.prompt();
+      try { await ev.userChoice; } catch (e) { /* ignore */ }
+    };
+    // "✕" hides it for 30 days.
+    $('#installX').onclick = () => { set(HIDE_KEY, String(Date.now() + 30 * 86400000)); box.hidden = true; };
+  }
+  window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); installEvt = e; paintInstall(); });
+  window.addEventListener('appinstalled', () => { installEvt = null; paintInstall(); });
+  window.addEventListener('online', paintNet);
+  window.addEventListener('offline', paintNet);
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('sw.js').catch(() => {});
+    navigator.serviceWorker.addEventListener('controllerchange', paintNet);
   }
   function paintLabels() {
     $('#themeBtn').title = t('ពន្លឺ / ងងឹត', 'Light / Dark');
@@ -189,6 +235,8 @@
   }
   paintLabels();
   paintTheme();
+  paintNet();
+  paintInstall();
   // Coming back to the menu (phone back button) shows any change made by the admin.
   window.addEventListener('pageshow', e => { if (e.persisted) load(); });
   load();
