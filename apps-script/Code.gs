@@ -66,7 +66,9 @@ function doPost(e) {
     // Each app checks its own tick box in the Users sheet (admins can open everything).
     const app = ACTION_APP[req.action];
     if (app && !canUse_(user, app)) throw new Error('NOACCESS: ' + user.email + ' has no access to ' + appTitle_(app) + '. Ask the admin to tick it in the Users sheet.');
-    return json_({ ok: true, data: action(req.payload || {}, user) });
+    const out = { ok: true, data: action(req.payload || {}, user) };
+    if (user.session) out.session = user.session;   // the apps save it in place of the Google sign-in
+    return json_(out);
   } catch (err) {
     return json_({ ok: false, error: String((err && err.message) || err) });
   }
@@ -149,25 +151,85 @@ function ensureAppColumns_() {
 
 // ---------- Auth ----------
 
-/** Verifies a Google Sign-In ID token and returns the matching active user from the Users sheet. */
+/**
+ * Checks the sign-in (Google ID token or this app's own session) and returns the matching active user
+ * from the Users sheet. A Google sign-in only lasts 1 hour, so it is swapped for a 30-day session that
+ * renews itself while the person keeps using the apps. Setting Active to No still blocks them at once.
+ */
 function authenticate_(token) {
   if (!token) throw new Error('AUTH: Please sign in.');
-  const cache = CacheService.getScriptCache();
-  const key = 'tok_' + Utilities.base64EncodeWebSafe(
-    Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, token));
-  let email = cache.get(key);
-  if (!email) {
-    const info = verifyToken_(token);
-    email = info.email;
-    const secondsLeft = Number(info.exp) - Math.floor(Date.now() / 1000);
-    if (secondsLeft > 60) cache.put(key, email, Math.min(secondsLeft - 30, 3000));
+  let email, session = null;
+  const own = readSession_(token);
+  if (own) {
+    email = own.email;
+    if (own.exp - Math.floor(Date.now() / 1000) < SESSION_RENEW_DAYS * 86400) session = makeSession_(email);
+  } else {
+    const cache = CacheService.getScriptCache();
+    const key = 'tok_' + Utilities.base64EncodeWebSafe(
+      Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, token));
+    email = cache.get(key);
+    if (!email) {
+      const info = verifyToken_(token);
+      email = info.email;
+      const secondsLeft = Number(info.exp) - Math.floor(Date.now() / 1000);
+      if (secondsLeft > 60) cache.put(key, email, Math.min(secondsLeft - 30, 3000));
+    }
+    session = makeSession_(email);
   }
   const user = readTable_(SHEETS.USERS).find(u =>
     String(u['Email']).trim().toLowerCase() === email && isYes_(u['Active']));
   if (!user) throw new Error('NOACCESS: ' + email + ' is not allowed to use this app. Ask the admin to add you to the Users sheet.');
   const apps = {};
   HOME_APPS.forEach(a => { if (a.col in user) apps[a.key] = isYes_(user[a.col]); });
-  return { email: email, name: user['Name'] || '', role: String(user['Role'] || 'user').toLowerCase(), apps: apps };
+  return { email: email, name: user['Name'] || '', role: String(user['Role'] || 'user').toLowerCase(), apps: apps, session: session };
+}
+
+// ---------- Sessions: stay signed in ----------
+// Shaped like a Google token (header.body.signature) so the apps read the email and expiry the same way.
+// Signed with SESSION_SECRET, which the script creates once in Script Properties; deleting it signs everyone out.
+const SESSION_DAYS = 30;
+const SESSION_RENEW_DAYS = 15;   // used within the last 15 days: a fresh 30 days is sent back
+
+function sessionSecret_() {
+  const props = PropertiesService.getScriptProperties();
+  let secret = props.getProperty('SESSION_SECRET');
+  if (secret) return secret;
+  const lock = LockService.getScriptLock();
+  lock.waitLock(20000);
+  try {
+    secret = props.getProperty('SESSION_SECRET');
+    if (!secret) {
+      secret = Utilities.getUuid() + Utilities.getUuid();
+      props.setProperty('SESSION_SECRET', secret);
+    }
+  } finally {
+    lock.releaseLock();
+  }
+  return secret;
+}
+
+const b64url_ = data => Utilities.base64EncodeWebSafe(data).replace(/=+$/, '');
+const b64urlText_ = s => Utilities.newBlob(Utilities.base64DecodeWebSafe(s + '==='.slice((s.length + 3) % 4))).getDataAsString();
+const SESSION_HEAD = b64url_(JSON.stringify({ alg: 'HS256', typ: 'STEEL' }));
+
+function sessionSig_(text) {
+  return b64url_(Utilities.computeHmacSha256Signature(text, sessionSecret_()));
+}
+
+function makeSession_(email) {
+  const now = Math.floor(Date.now() / 1000);
+  const body = b64url_(Utilities.newBlob(JSON.stringify({ email: email, iat: now, exp: now + SESSION_DAYS * 86400 })).getBytes());
+  return SESSION_HEAD + '.' + body + '.' + sessionSig_(SESSION_HEAD + '.' + body);
+}
+
+/** This app's own session: returns {email, exp}, null for a Google token, or throws AUTH when expired or tampered with. */
+function readSession_(token) {
+  const parts = String(token).split('.');
+  if (parts.length !== 3 || parts[0] !== SESSION_HEAD) return null;
+  if (sessionSig_(parts[0] + '.' + parts[1]) !== parts[2]) throw new Error('AUTH: Sign-in expired. Please sign in again.');
+  const body = JSON.parse(b64urlText_(parts[1]));
+  if (!(body.exp * 1000 > Date.now())) throw new Error('AUTH: Sign-in expired. Please sign in again.');
+  return { email: String(body.email).toLowerCase(), exp: body.exp };
 }
 
 /** Checks a Google Sign-In ID token with Google; returns its details with a lower-case email. */
@@ -190,7 +252,8 @@ function verifyToken_(token) {
  * sheet with Active = No (the admin switches it to Yes) and tells the Telegram group once.
  */
 function requestAccess_(token) {
-  const info = verifyToken_(token);
+  const own = readSession_(token);
+  const info = own ? { email: own.email, name: '' } : verifyToken_(token);
   const email = info.email;
   const name = String(info.name || '').trim();
   const lock = LockService.getScriptLock();

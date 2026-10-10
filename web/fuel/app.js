@@ -79,6 +79,8 @@
       err.transient = !code && /lock|timed? ?out|too many|exceeded|service|try again|internal error/i.test(err.message);
       throw err;
     }
+    // Stay signed in: the server swaps the 1-hour Google sign-in for a session that renews itself.
+    if (data.session && state.token) { state.token = data.session; storeSet(TOKEN_KEY, data.session); }
     return data.data;
   }
 

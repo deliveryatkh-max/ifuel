@@ -50,6 +50,7 @@
       const code = (String(data.error).match(/^(AUTH|NOACCESS):/) || [])[1] || '';
       throw Object.assign(new Error(String(data.error).replace(/^(AUTH|NOACCESS):\s*/, '')), { code });
     }
+    if (data.session) set(TOKEN_KEY, data.session);   // stay signed in: the server renews the sign-in
     return data.data;
   }
 
