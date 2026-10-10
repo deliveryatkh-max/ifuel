@@ -23,12 +23,12 @@
     BUSY: 'ប្រព័ន្ធកំពុងរវល់។ សូមព្យាយាមម្តងទៀត។',
     LIMIT: 'សំណើច្រើនពេកសម្រាប់លេខកាតនេះ។ សូមរង់ចាំបន្តិច។',
     SAVE: 'មិនអាចរក្សាទុកសំណើបានទេ។ សូមព្យាយាមម្តងទៀត។',
-    GPS: 'ត្រូវការទីតាំង។ អ្នកត្រូវនៅជិតការដ្ឋាន។',
+    GPS: 'អ្នកត្រូវនៅជិតកន្លែងធ្វើការរបស់អ្នក។',
   };
   function niceError(e) {
     const code = e.code || '';
     if (code === 'DUPLICATE_OT') return t('អ្នកមានថែមម៉ោងនៅពេលនេះរួចហើយ។ ', '') + e.message;
-    if (ERR_KM[code] && (window.LANG && LANG.get() === 'km')) return ERR_KM[code] + (code === 'GPS' ? ' (' + e.message + ')' : '');
+    if (ERR_KM[code] && (window.LANG && LANG.get() === 'km')) return ERR_KM[code];
     return e.message;
   }
 
@@ -152,7 +152,7 @@
             ${reasons.length ? `<div class="chips">${reasons.map(r => `<button type="button" class="chip${d.reason === r ? ' on' : ''}" data-r="${esc(r)}">${esc(r)}</button>`).join('')}</div>` : ''}
             <textarea class="in" id="otReason" maxlength="500" placeholder="${esc(t('ឧ. រៀបចំទំនិញសម្រាប់ដឹកជញ្ជូន', 'e.g. Preparing goods for delivery'))}">${esc(d.reason || '')}</textarea>
           </div>
-          ${c.needGps ? `<div class="hint">📍 ${t('ត្រូវការទីតាំងរបស់អ្នក ហើយអ្នកត្រូវនៅក្នុងចម្ងាយ', 'Your location is needed. You must be within')} ${esc(c.radius)} m ${t('ពីការដ្ឋាន។', 'of the site.')}</div>` : ''}
+          ${c.needGps ? `<div class="hint">📍 ${t('ត្រូវការទីតាំងរបស់អ្នក ហើយអ្នកត្រូវនៅក្នុងចម្ងាយ', 'Your location is needed. You must be within')} ${esc(c.radius)} m ${t('ពីកន្លែងធ្វើការរបស់អ្នក។', 'of your workplace.')}</div>` : ''}
         </section>
 
         ${state.sendErr ? `<div class="alert bad" role="alert" style="margin:0 0 12px">${esc(state.sendErr)}</div>` : ''}
