@@ -423,7 +423,7 @@
     } catch (e) {
       if (!state.token && !DEMO) return;   // signOut already re-rendered the login
       redraw = () => start();
-      $('#view').innerHTML = `<div class="login"><div class="big">🚫</div><div class="alert bad">${esc(e.message)}</div>
+      $('#view').innerHTML = `<div class="login"><div class="big">🚫</div><div class="alert bad">${esc(e.code === 'NOACCESS' && window.AccessRequest ? AccessRequest.notAllowed(e.message) : e.message)}</div>
         <p><button class="btn" id="retry">${L('ព្យាយាមម្តងទៀត', 'Try again')}</button> <button class="btn" id="out">${L('ចាកចេញ', 'Sign out')}</button></p>
         ${e.code === 'NOACCESS' ? `<p id="reqBox"><button class="btn ok" id="req">📨 ${L('ស្នើសុំទៅអ្នកគ្រប់គ្រង', 'Request to Admin')}</button></p>` : ''}</div>`;
       $('#retry').onclick = start; $('#out').onclick = () => signOut(false);
@@ -435,20 +435,15 @@
   }
 
   // Asks the admin to add this Google account: the server adds it to the Users sheet as not active yet and tells the Telegram group.
-  async function requestAccess() {
-    const btn = $('#req');
-    btn.disabled = true;
-    btn.textContent = L('កំពុងផ្ញើ…', 'Sending…');
-    try {
-      const r = await api('requestAccess');
-      $('#reqBox').innerHTML = r.status === 'active'
-        ? `<div class="alert ok">${L('គណនីរបស់អ្នកបានអនុញ្ញាតហើយ។ ចុច ព្យាយាមម្តងទៀត។', 'Your account is already allowed. Tap Try again.')}</div>`
-        : `<div class="alert ok">✅ ${L('សំណើបានផ្ញើទៅអ្នកគ្រប់គ្រង។ សូមរង់ចាំការអនុញ្ញាត រួចចុច ព្យាយាមម្តងទៀត។', 'Request sent to the admin. Once they allow you, tap Try again.')}</div>`;
-    } catch (e) {
-      btn.disabled = false;
-      btn.textContent = '📨 ' + L('ស្នើសុំទៅអ្នកគ្រប់គ្រង', 'Request to Admin');
-      $('#reqBox').insertAdjacentHTML('beforeend', `<div class="alert bad">${esc(e.message)}</div>`);
-    }
+  function requestAccess() {
+    AccessRequest.open({
+      call: (action, payload) => api(action, payload),
+      onDone: status => {
+        $('#reqBox').innerHTML = status === 'active'
+          ? `<div class="alert ok">${L('គណនីរបស់អ្នកបានអនុញ្ញាតហើយ។ ចុច ព្យាយាមម្តងទៀត។', 'Your account is already allowed. Tap Try again.')}</div>`
+          : `<div class="alert ok">✅ ${L('សំណើបានផ្ញើទៅអ្នកគ្រប់គ្រង។ សូមរង់ចាំការអនុញ្ញាត រួចចុច ព្យាយាមម្តងទៀត។', 'Request sent to the admin. Once they allow you, tap Try again.')}</div>`;
+      },
+    });
   }
 
   function showRole() {

@@ -37,11 +37,11 @@
     clearTimeout(toastTimer); toastTimer = setTimeout(() => { el.hidden = true; }, 2600);
   }
 
-  async function api(action) {
+  async function api(action, payload) {
     let res, data;
     try {
       res = await fetch(CFG.API_URL, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify({ action, token: get(TOKEN_KEY), payload: {} }) });
+        body: JSON.stringify({ action, token: get(TOKEN_KEY), payload: payload || {} }) });
       data = await res.json();
     } catch (e) {
       throw Object.assign(new Error(t('មិនអាចភ្ជាប់អ៊ីនធឺណិត។ សូមព្យាយាមម្តងទៀត។', 'No connection. Please try again.')), { code: 'NET' });
@@ -85,7 +85,7 @@
   function renderError(e, canRequest) {
     screen = () => renderError(e, canRequest);
     $('#view').innerHTML = `<div class="card"><div class="big">${canRequest ? '🔒' : '⚠️'}</div>
-      <div class="alert bad">${esc(e.message)}</div>
+      <div class="alert bad">${esc(canRequest && window.AccessRequest ? AccessRequest.notAllowed(e.message) : e.message)}</div>
       <p><button class="btn" id="retry">${t('ព្យាយាមម្តងទៀត', 'Try again')}</button><button class="btn" id="out2">${t('ចាកចេញ', 'Sign out')}</button></p>
       ${canRequest ? `<p id="reqBox"><button class="btn ok" id="req">📨 ${t('ស្នើសុំទៅអ្នកគ្រប់គ្រង', 'Request to Admin')}</button></p>` : ''}</div>`;
     $('#retry').onclick = load;
@@ -93,18 +93,16 @@
     if ($('#req')) $('#req').onclick = requestAccess;
   }
 
-  async function requestAccess() {
-    const btn = $('#req');
-    btn.disabled = true; btn.textContent = t('កំពុងផ្ញើ…', 'Sending…');
-    try {
-      const r = await api('requestAccess');
-      $('#reqBox').innerHTML = r.status === 'active'
-        ? `<div class="alert ok">${t('គណនីរបស់អ្នកបានអនុញ្ញាតហើយ។ ចុច ព្យាយាមម្តងទៀត។', 'Your account is already allowed. Tap Try again.')}</div>`
-        : `<div class="alert ok">✅ ${t('សំណើបានផ្ញើទៅអ្នកគ្រប់គ្រង។ សូមរង់ចាំការអនុញ្ញាត រួចចុច ព្យាយាមម្តងទៀត។', 'Request sent to the admin. Once they allow you, tap Try again.')}</div>`;
-    } catch (e) {
-      btn.disabled = false; btn.textContent = '📨 ' + t('ស្នើសុំទៅអ្នកគ្រប់គ្រង', 'Request to Admin');
-      toast(e.message);
-    }
+  // Opens the request form (request.js): full name, employee ID and department go to the Users sheet.
+  function requestAccess() {
+    AccessRequest.open({
+      call: api,
+      onDone: status => {
+        $('#reqBox').innerHTML = status === 'active'
+          ? `<div class="alert ok">${t('គណនីរបស់អ្នកបានអនុញ្ញាតហើយ។ ចុច ព្យាយាមម្តងទៀត។', 'Your account is already allowed. Tap Try again.')}</div>`
+          : `<div class="alert ok">✅ ${t('សំណើបានផ្ញើទៅអ្នកគ្រប់គ្រង។ សូមរង់ចាំការអនុញ្ញាត រួចចុច ព្យាយាមម្តងទៀត។', 'Request sent to the admin. Once they allow you, tap Try again.')}</div>`;
+      },
+    });
   }
 
   function loadGsi() {

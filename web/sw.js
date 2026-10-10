@@ -5,7 +5,7 @@
 const VERSION = 'steel-v1';
 const FONTS = 'steel-fonts-v1';
 const SHELL = [
-  './', 'home.css', 'home.js', 'lang.js', 'config.js', 'manifest.webmanifest',
+  './', 'home.css', 'home.js', 'lang.js', 'request.js', 'config.js', 'manifest.webmanifest',
   'icons/isi-logo.png', 'icons/favicon.png', 'icons/app-192.png', 'icons/flag-kh.svg', 'icons/flag-gb.svg',
   'icons/fuel.svg', 'icons/transport.svg', 'icons/overtime.svg', 'icons/location.svg', 'icons/dashboard.svg', 'icons/home.svg',
   'fuel/', 'fuel/app.js', 'fuel/styles.css',

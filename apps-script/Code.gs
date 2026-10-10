@@ -59,7 +59,9 @@ function doPost(e) {
   try {
     const req = JSON.parse(e.postData.contents);
     const action = ACTIONS[req.action];
-    if (req.action === 'requestAccess') return json_({ ok: true, data: requestAccess_(req.token) });
+    // Signed in with Google but not (yet) in the Users sheet: these two only need the sign-in.
+    if (req.action === 'requestAccess') return json_({ ok: true, data: requestAccess_(req.token, req.payload || {}) });
+    if (req.action === 'requestForm') return json_({ ok: true, data: requestForm_(req.token) });
     if (!action) throw new Error('Unknown action: ' + req.action);
     if (req.action === 'home') ensureAppColumns_();
     const user = authenticate_(req.token);
@@ -267,49 +269,120 @@ function verifyToken_(token) {
   return info;
 }
 
-/**
- * "Request to Admin" from the not-allowed screen: adds the signed-in Google account to the Users
- * sheet with Active = No (the admin switches it to Yes) and tells the Telegram group once.
- */
-function requestAccess_(token) {
+// ---------- Request to Admin ----------
+// A person signed in with Google but not allowed yet fills in a short form (full name, employee ID,
+// department from the "Departments" sheet). The answers go into the Users sheet with Active = No, the
+// usual apps already ticked, and a note goes to the Telegram group. The admin switches Active to Yes.
+
+const DEPT_SHEET = 'Departments';
+const REQ_COLS = ['Employee ID', 'Department'];
+
+/** Who is signed in (Google token or this app's session), without needing a Users row. */
+function identity_(token) {
   const own = readSession_(token);
-  const info = own ? { email: own.email, name: '' } : verifyToken_(token);
+  return own ? { email: own.email, name: '' } : verifyToken_(token);
+}
+
+/** Department names for the drop-down: column "Department" of the Departments sheet (Active = No hides one). */
+function departments_() {
+  const ss = SpreadsheetApp.getActive();
+  if (!ss.getSheetByName(DEPT_SHEET)) {
+    const sheet = ss.insertSheet(DEPT_SHEET);
+    sheet.getRange(1, 1, 1, 2).setValues([['Department', 'Active']]).setFontWeight('bold');
+    return [];
+  }
+  const seen = {};
+  return readTable_(DEPT_SHEET)
+    .filter(r => !isNo_(r['Active']))
+    .map(r => String(r['Department'] || '').trim())
+    .filter(d => d && !seen[d] && (seen[d] = true));
+}
+
+/** What the request form needs: the departments and anything this person already sent. */
+function requestForm_(token) {
+  const info = identity_(token);
+  const sheet = SpreadsheetApp.getActive().getSheetByName(SHEETS.USERS);
+  const values = sheet.getDataRange().getValues();
+  const header = values[0].map(h => String(h).trim());
+  const col = h => header.indexOf(h);
+  const row = values.slice(1).find(r => String(r[col('Email')]).trim().toLowerCase() === info.email);
+  const get = (r, h) => (r && col(h) >= 0 ? String(r[col(h)] || '').trim() : '');
+  return {
+    email: info.email,
+    status: row && isYes_(row[col('Active')]) ? 'active' : row ? 'requested' : 'new',
+    fullName: get(row, 'Name') || String(info.name || '').trim(),
+    employeeId: get(row, 'Employee ID'),
+    department: get(row, 'Department'),
+    departments: departments_(),
+  };
+}
+
+function requestAccess_(token, p) {
+  const info = identity_(token);
   const email = info.email;
-  const name = String(info.name || '').trim();
+  // The form sends fullName, employeeId and department; older app versions send nothing.
+  const form = p && p.fullName !== undefined;
+  const name = String((form ? p.fullName : info.name) || '').replace(/\s+/g, ' ').trim().slice(0, 100);
+  const empId = form ? String(p.employeeId || '').trim().slice(0, 40) : '';
+  const dept = form ? String(p.department || '').trim().slice(0, 100) : '';
+  if (form) {
+    if (!name) throw new Error('Full name is required. / សូមបញ្ចូលឈ្មោះពេញ។');
+    if (!empId) throw new Error('Employee ID is required. / សូមបញ្ចូលលេខសម្គាល់បុគ្គលិក។');
+    if (!dept) throw new Error('Department is required. / សូមជ្រើសរើសផ្នែក។');
+    const list = departments_();
+    if (list.length && list.indexOf(dept) < 0) throw new Error('Choose a department from the list. / សូមជ្រើសរើសផ្នែកពីបញ្ជី។');
+  }
   const lock = LockService.getScriptLock();
   lock.waitLock(20000);
-  let added = false;
+  let added = false, changed = false;
   try {
     const sheet = SpreadsheetApp.getActive().getSheetByName(SHEETS.USERS);
-    const values = sheet.getDataRange().getValues();
-    const header = values[0].map(h => String(h).trim());
+    let header = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map(h => String(h).trim());
+    if (form) REQ_COLS.filter(h => header.indexOf(h) < 0).forEach(h => {
+      sheet.getRange(1, sheet.getLastColumn() + 1).setValue(h).setFontWeight('bold');
+      header.push(h);
+    });
     const col = h => header.indexOf(h);
-    const existing = values.slice(1).find(r => String(r[col('Email')]).trim().toLowerCase() === email);
-    if (existing && isYes_(existing[col('Active')])) return { status: 'active' };
-    if (!existing) {
-      const row = header.map(h => ({ Email: email, Name: name, Role: 'user', Active: 'No' })[h] || '');
-      sheet.appendRow(row);
+    const values = sheet.getDataRange().getValues();
+    const i = values.findIndex((r, k) => k > 0 && String(r[col('Email')]).trim().toLowerCase() === email);
+    if (i > 0 && isYes_(values[i][col('Active')])) return { status: 'active' };
+    let r;
+    if (i < 0) {
+      sheet.appendRow(header.map(h => ({ Email: email, Name: name, Role: 'user', Active: 'No' })[h] || ''));
+      r = sheet.getLastRow();
       // App tick boxes on the new row: the default apps ticked, so the admin only switches Active to Yes.
-      const r = sheet.getLastRow();
       HOME_APPS.forEach(a => { const c = col(a.col); if (c >= 0) sheet.getRange(r, c + 1).insertCheckboxes().setValue(DEFAULT_APPS.indexOf(a.key) >= 0); });
       added = true;
+    } else {
+      r = i + 1;
+      if (form && name) sheet.getRange(r, col('Name') + 1).setValue(name);
+    }
+    if (form) {
+      const old = i > 0 ? [String(values[i][col('Employee ID')] || ''), String(values[i][col('Department')] || '')] : ['', ''];
+      changed = added || old[0] !== empId || old[1] !== dept;
+      // Kept as text so IDs like 00123 keep their zeros.
+      sheet.getRange(r, col('Employee ID') + 1).setNumberFormat('@').setValue(empId);
+      sheet.getRange(r, col('Department') + 1).setValue(dept);
     }
   } finally {
     lock.releaseLock();
+    delete tableCache_[SHEETS.USERS];
   }
-  // One Telegram note per account every 6 hours, so repeated taps don't flood the group.
+  // One Telegram note per account every 6 hours (or when the details change), so repeated taps don't flood the group.
   const cache = CacheService.getScriptCache();
-  if (telegramReady_() && (added || !cache.get('req_' + email))) {
+  if (telegramReady_() && (added || changed || !cache.get('req_' + email))) {
     cache.put('req_' + email, '1', 21600);
     const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     try {
       telegram_('sendMessage', { chat_id: getSetting_('TELEGRAM_CHAT_ID'), parse_mode: 'HTML', text: [
         '🔑 <b>ស្នើសុំប្រើកម្មវិធី / Access request</b>',
         '👤 ' + esc(name || '-'),
+        empId ? '🪪 ' + esc(empId) : null,
+        dept ? '🏢 ' + esc(dept) : null,
         '📧 ' + esc(email),
         '',
         'Users sheet: Active = Yes ដើម្បីអនុញ្ញាត (កម្មវិធីធម្មតាបានធីករួច) / set Active = Yes to allow (the usual apps are already ticked).',
-      ].join('\n') });
+      ].filter(x => x !== null).join('\n') });
     } catch (e) { /* the request is saved in the sheet even if Telegram fails */ }
   }
   return { status: 'requested' };
