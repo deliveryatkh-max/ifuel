@@ -41,8 +41,10 @@ const DEPT_COLS = ['Department', 'Department ID', 'QR Link', 'Print QR', 'QR Cod
 
 const APPROVER_COLS = ['Telegram Username', 'Manager Name', 'Chat ID', 'Telegram Name', 'Registered At', 'Active'];
 const LOG_COLS = ['Time', 'Request ID', 'Event', 'By', 'Detail', 'Key'];
+const TIME_MODES = ['Auto', 'Manual'];
 const SETTING_ROWS = [
   ['Setting', 'Value', 'What it does'],
+  ['DATE_TIME_MODE', 'Auto', 'Auto = date is today, Start = end of the employee\'s shift (Shift Working Time in Employee & Approver), End = the time the request is sent; staff cannot change them. Manual = staff type the date and times. Also in the sheet menu OT App → Date & time.'],
   ['MAX_HOURS_PER_REQUEST', '', 'Largest OT hours one request may have. Blank = no limit.'],
   ['MAX_DAYS_IN_PAST', '7', 'How many days back an OT date may be (today counts as 0). Blank = 7.'],
   ['MAX_DAYS_IN_FUTURE', '', 'How many days ahead an OT date may be. Blank = no limit.'],
@@ -147,7 +149,7 @@ function serialOf_(ymd) {
 const ymdOfSerial_ = n => new Date(Date.UTC(1899, 11, 30) + n * 86400000).toISOString().slice(0, 10);
 const dmyOf_ = ymd => { const d = new Date(ymd + 'T00:00:00Z'); return d.getUTCDate() + '-' + ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][d.getUTCMonth()] + '-' + String(d.getUTCFullYear()).slice(2); };
 
-function todayYmd_() { return fmt_(new Date(), 'yyyy-MM-dd'); }
+function todayYmd_() { return fmt_(now_(), 'yyyy-MM-dd'); }
 
 function withLock_(fn) {
   const lock = LockService.getScriptLock();
@@ -166,6 +168,7 @@ function settings_() {
   const num = k => (out[k] === '' || isNaN(+out[k]) ? null : +out[k]);
   const ll = String(out.SITE_LATLONG || '').match(/^\s*(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)\s*$/);
   return {
+    timeMode: /^manual/i.test(out.DATE_TIME_MODE || '') ? 'manual' : 'auto',
     maxHours: num('MAX_HOURS_PER_REQUEST'),
     maxPast: num('MAX_DAYS_IN_PAST') == null ? 7 : num('MAX_DAYS_IN_PAST'),   // Kim 2026-10-10: back-dating up to 7 days
     maxFuture: num('MAX_DAYS_IN_FUTURE'),
@@ -185,6 +188,7 @@ function publicConfig_() {
     reasons, maxHours: s.maxHours, maxPast: s.maxPast, maxFuture: s.maxFuture, overnight: s.overnight,
     needGps: !!s.site, radius: s.site ? s.site.radius : null, today: todayYmd_(), holidays: holidays_(),
     needDept: Object.keys(depts_()).length > 0,
+    timeMode: s.timeMode, serverNow: now_().getTime(), maxAutoHours: AUTO_MAX_HOURS,
   };
 }
 
@@ -269,6 +273,8 @@ function readEmployees_() {
     kh: col(k => k === 'khmername'),
     mgr: col(k => k.indexOf('manager') >= 0 || k.indexOf('approver') >= 0),
     tg: col(k => k.indexOf('telegram') >= 0 && k.indexOf('chat') < 0),
+    shift: col(k => k === 'shift' || k === 'shiftname'),
+    shiftTime: col(k => k.indexOf('workingtime') >= 0 || k === 'shifttime' || k === 'shifthours'),
   };
   if (c.id < 0 || c.en < 0 || c.mgr < 0) fail_('SETUP', '"' + OT.EMP + '" needs ID No., Name and Direct Manager (Approver) columns.');
   const byId = {};
@@ -281,6 +287,8 @@ function readEmployees_() {
       kh: c.kh >= 0 ? String(values[r][c.kh] || '').trim() : '',
       manager: String(values[r][c.mgr] || '').trim(),
       telegram: c.tg >= 0 ? String(values[r][c.tg] || '').trim() : '',
+      shift: c.shift >= 0 ? String(values[r][c.shift] || '').trim() : '',
+      shiftTime: c.shiftTime >= 0 ? shiftText_(values[r][c.shiftTime]) : '',
     };
     (byId[id] = byId[id] || []).push(rec);
   }
@@ -343,10 +351,10 @@ function resolveApprover_(id, employees, approvers) {
 
 function employeesCached_() {
   const cache = CacheService.getScriptCache();
-  const hit = cache.get('emp_v1');
+  const hit = cache.get('emp_v2');
   if (hit) return JSON.parse(hit);
   const e = readEmployees_();
-  try { cache.put('emp_v1', JSON.stringify(e), 120); } catch (err) { /* large list: skip cache */ }
+  try { cache.put('emp_v2', JSON.stringify(e), 120); } catch (err) { /* large list: skip cache */ }
   return e;
 }
 
@@ -362,7 +370,7 @@ function employeeList_() {
     if (employees[id].length > 1) return;   // duplicated IDs are refused at lookup and submit
     const e = employees[id][0];
     const r = resolveApprover_(id, employees, approvers);
-    list.push({ id, en: e.en, kh: e.kh || kh[id] || '', manager: e.manager || '', ready: r.ok });
+    list.push({ id, en: e.en, kh: e.kh || kh[id] || '', manager: e.manager || '', ready: r.ok, shift: e.shift || '', shiftTime: e.shiftTime || '', otStart: shiftEndHHMM_(e.shiftTime) });
   });
   list.sort((a, b) => a.en.localeCompare(b.en));
   return { list };
@@ -378,7 +386,47 @@ function lookupPublic_(id) {
   return {
     id: emp.id, en: emp.en, kh: emp.kh || khmerFromHistory_()[emp.id] || '',
     manager: emp.manager || '', ready: r.ok, problem: r.ok ? '' : r.code,
+    shift: emp.shift || '', shiftTime: emp.shiftTime || '', otStart: shiftEndHHMM_(emp.shiftTime),
   };
+}
+
+// ---------------------------------------------------------------- shift times (Auto date & time)
+// "Shift Working Time" is text like "7:00 AM to 4:00 PM" (or 07:00-16:00). In Auto mode OT starts when the
+// shift ends and stops at the moment the request is sent. Night shifts (12:00 PM to 4:00 AM) work the same way.
+const AUTO_MAX_HOURS = 16;   // sent more than 16 h after the shift ended = before the shift ended → refused
+function now_() { return new Date(); }
+
+function shiftText_(v) {
+  if (v instanceof Date) return hhmm12_(v.getHours() * 60 + v.getMinutes());
+  return String(v == null ? '' : v).replace(/\s+/g, ' ').trim();
+}
+function parseShift_(text) {
+  const t = String(text || '').match(/(\d{1,2})(?:[:.](\d{2}))?\s*(am|pm)?/gi);
+  if (!t || t.length < 2) return null;
+  const toMin = x => {
+    const m = x.match(/(\d{1,2})(?:[:.](\d{2}))?\s*(am|pm)?/i);
+    let h = +m[1]; const mm = +(m[2] || 0), ap = (m[3] || '').toLowerCase();
+    if (h > 23 || mm > 59) return null;
+    if (ap === 'pm' && h < 12) h += 12;
+    if (ap === 'am' && h === 12) h = 0;
+    return h * 60 + mm;
+  };
+  const a = toMin(t[0]), b = toMin(t[t.length - 1]);
+  return a == null || b == null ? null : { start: a, end: b };
+}
+const hhmm24_ = m => String(Math.floor(m / 60) % 24).padStart(2, '0') + ':' + String(m % 60).padStart(2, '0');
+function shiftEndHHMM_(text) { const p = parseShift_(text); return p ? hhmm24_(p.end) : ''; }
+
+// The OT date and times for "now", from the employee's shift. Refused before the shift has ended.
+function autoTimes_(emp, now) {
+  const sh = parseShift_(emp && emp.shiftTime);
+  if (!sh) fail_('NOSHIFT', 'Your shift working time is not set in the employee list. Please ask your manager or HR to add it.');
+  const nowMin = now.getHours() * 60 + now.getMinutes();
+  const elapsed = (nowMin - sh.end + 1440) % 1440;
+  if (elapsed < 1 || elapsed > AUTO_MAX_HOURS * 60) fail_('EARLY', 'Your shift ends at ' + hhmm12_(sh.end) + '. OT can be requested only after that time.');
+  const day = new Date(now.getTime());
+  if (nowMin < sh.end) day.setDate(day.getDate() - 1);   // OT went past midnight: it belongs to the day the shift ended
+  return { date: fmt_(day, 'yyyy-MM-dd'), start: hhmm24_(sh.end), end: hhmm24_(nowMin) };
 }
 
 // ---------------------------------------------------------------- department QR codes
@@ -547,6 +595,13 @@ function submit_(p) {
   if (count >= 12) fail_('LIMIT', 'Too many requests for this Employee ID. Please wait and try again later.');
 
   const cfg = settings_();
+  if (cfg.timeMode === 'auto') {
+    // Auto: the server sets the date and both times; anything the phone sent for them is ignored.
+    const one = employeesCached_()[id];
+    if (!one) fail_('NOTFOUND', 'Employee ID not found.');
+    if (one.length > 1) fail_('DUPLICATE', 'This Employee ID is listed more than once. Please contact HR.');
+    p = Object.assign({}, p, autoTimes_(one[0], now_()));
+  }
   const v = validate_(p, cfg);
   const deptList = depts_();
   let dept = '';
@@ -638,7 +693,8 @@ function submit_(p) {
       log_(saved.reqId, 'NOTIFY_FAILED', 'system', safeErr_(err));
     }
   }
-  return { reqId: saved.reqId, status, manager: saved.emp.manager, problem: saved.route.ok ? '' : saved.route.code };
+  return { reqId: saved.reqId, status, manager: saved.emp.manager, problem: saved.route.ok ? '' : saved.route.code,
+    date: saved.v.date, start: hhmm24_(saved.v.s), end: hhmm24_(saved.v.e), hours: saved.v.hours };
 }
 
 function findKeyInLog_(key) {
@@ -943,6 +999,7 @@ function setup() {
     s.setFrozenRows(1);
     s.setColumnWidth(1, 210); s.setColumnWidth(2, 180); s.setColumnWidth(3, 520);
   }
+  ensureSettingRows_();
   makeDepartmentQR();
   const props = PropertiesService.getScriptProperties();
   if (!props.getProperty('OT_WEBHOOK_SECRET')) props.setProperty('OT_WEBHOOK_SECRET', Utilities.getUuid().replace(/-/g, '') + Utilities.getUuid().replace(/-/g, ''));
@@ -995,6 +1052,53 @@ function makeDepartmentQR() {
   console.log('New Department IDs: ' + (made.join(', ') || 'none (all rows already have one)'));
 }
 
+// Adds settings that a newer version of the app knows about to an existing "OT App Settings" tab (at the end).
+function ensureSettingRows_() {
+  const sh = ss_().getSheetByName(OT.SETTINGS);
+  if (!sh) return null;
+  const last = Math.max(1, sh.getLastRow());
+  const have = sh.getRange(1, 1, last, 1).getDisplayValues().map(r => String(r[0]).trim());
+  SETTING_ROWS.slice(1).forEach(r => {
+    if (have.indexOf(r[0]) >= 0) return;
+    const row = sh.getLastRow() + 1;
+    ensureRows_(sh, row);
+    sh.getRange(row, 1, 1, 3).setValues([r]);
+    have.push(r[0]);
+  });
+  const row = have.indexOf('DATE_TIME_MODE') + 1;
+  try { sh.getRange(row, 2).setDataValidation(SpreadsheetApp.newDataValidation().requireValueInList(TIME_MODES, true).setAllowInvalid(false).build()); } catch (e) { /* dropdown is a nicety */ }
+  return { sh, row };
+}
+
+function setTimeMode_(mode) {
+  const s = ensureSettingRows_();
+  if (!s) throw new Error('Run setup() first.');
+  s.sh.getRange(s.row, 2).setValue(mode);
+  const msg = mode === 'Auto'
+    ? 'Date & time: AUTO. Date = today, Start = end of shift, End = time of sending. Staff cannot change them.'
+    : 'Date & time: MANUAL. Staff type the OT date (up to ' + settings_().maxPast + ' days back) and the times.';
+  try { ss_().toast(msg, 'OT App', 8); } catch (e) { /* run from the editor */ }
+  console.log(msg);
+  return msg;
+}
+/** Sheet menu OT App → Date & time: Auto from shift (default). */
+function useAutoTime() { return setTimeMode_('Auto'); }
+/** Sheet menu OT App → Date & time: Manual entry. */
+function useManualTime() { return setTimeMode_('Manual'); }
+function showCheckData() { const t = checkData(); try { SpreadsheetApp.getUi().alert('OT App · Check data', t, SpreadsheetApp.getUi().ButtonSet.OK); } catch (e) { console.log(t); } }
+
+/** Adds the "OT App" menu to the sheet each time it is opened. */
+function onOpen() {
+  SpreadsheetApp.getUi().createMenu('OT App')
+    .addSubMenu(SpreadsheetApp.getUi().createMenu('⏱ Date & time')
+      .addItem('Auto from shift (default)', 'useAutoTime')
+      .addItem('Manual entry', 'useManualTime'))
+    .addSeparator()
+    .addItem('🏢 Make department QR codes', 'makeDepartmentQR')
+    .addItem('✅ Check data', 'showCheckData')
+    .addToUi();
+}
+
 /** Step 3 (after deploying the web app). Points the bot at this script through the Cloudflare relay. */
 function connectTelegram() {
   // Apps Script often reports the editor's /dev address here, so the /exec URL in OT_WEB_APP_URL wins when set.
@@ -1023,6 +1127,7 @@ function checkData() {
   const noKh = one.filter(e => !e.kh && !kh[e.id]).map(e => e.id);
   const noMgr = one.filter(e => !e.manager).map(e => e.id);
   const noTg = one.filter(e => e.manager && !normUser_(e.telegram)).map(e => e.id);
+  const noShift = one.filter(e => !parseShift_(e.shiftTime)).map(e => e.id);
   const users = Array.from(new Set(one.map(e => normUser_(e.telegram)).filter(Boolean)));
   const unreg = users.filter(u => !approvers.some(a => a.username === u && a.active && a.chatId));
   const lines = [
@@ -1032,6 +1137,7 @@ function checkData() {
     'Missing Khmer name (none in old OT rows either): ' + noKh.length,
     'Missing line manager: ' + (noMgr.join(', ') || 'none'),
     'Missing manager Telegram: ' + (noTg.join(', ') || 'none'),
+    'Missing or unreadable Shift Working Time (needed for Auto date & time): ' + noShift.length + (noShift.length ? ' (e.g. ' + noShift.slice(0, 10).join(', ') + ')' : ''),
     'Approver Telegram accounts: ' + users.map(u => '@' + u).join(', '),
     'Not yet registered on the bot: ' + (unreg.map(u => '@' + u).join(', ') || 'none'),
   ];

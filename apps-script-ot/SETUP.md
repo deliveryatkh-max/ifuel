@@ -194,6 +194,22 @@ How it works:
 - **New reasons:** a reason typed under "Other" is added to the **OT Reason** sheet, which is then sorted A–Z, so the next person can pick it from the list. The same reason typed again in a different case, or with a trailing dot, is not added twice.
 - **Date:** the form always starts on today's date. Back-dating is allowed for up to 7 days (OT App Settings → MAX_DAYS_IN_PAST, default 7). The form and the server both enforce this.
 
+## 13. Date & time setting (admin only, in the sheet)
+
+There are two modes. You switch between them in the sheet menu **OT App → ⏱ Date & time**, or in the **DATE_TIME_MODE** row of OT App Settings. Staff never see this setting, because only people with edit access to the sheet can change it.
+
+- **Auto (default):**
+  - The date is today.
+  - **Start** is the end of the employee's shift, taken from **Shift Working Time** in Employee & Approver (for example "7:00 AM to 4:00 PM" gives a 4:00 PM start).
+  - **End** is the time the request is sent.
+  - None of these can be changed on the form. The server works them out again from its own clock, so changing the phone's clock has no effect.
+  - OT that runs past midnight belongs to the day the shift ended. Night shifts such as "12:00 PM to 4:00 AM" work the same way, with OT starting at 4:00 AM.
+  - Sending before the shift has ended is refused with a message giving the shift end time.
+  - An employee with no Shift Working Time gets a message asking them to contact their manager or HR. **Fill this column for everyone before using Auto**, or switch to Manual until it is filled. OT App → ✅ Check data counts the missing rows.
+- **Manual:** staff choose the date (up to 7 days back) and type the start and end times.
+
+The menu appears the next time the sheet is opened after you paste the new script. The first time you use it, Google asks you to authorize it once.
+
 ## User guide: employees
 
 1. Open **isteel-app.pages.dev/overtime/**, or tap ថែមម៉ោង on the home menu.
