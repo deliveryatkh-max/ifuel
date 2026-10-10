@@ -145,3 +145,22 @@ input.in:focus, textarea.in:focus { border-color: var(--accent); box-shadow: 0 0
   background: #011e41; color: #fff; padding: 10px 16px; border-radius: 12px; font-size: 14px; max-width: calc(100% - 32px); text-align: center;
 }
 @media (min-width: 700px) { main { padding-top: 24px; } }
+
+/* Employee search: suggestions under the ID / name box. */
+.search { position: relative; flex: 1; min-width: 0; }
+.search .in { width: 100%; }
+.sugg {
+  position: absolute; left: 0; right: 0; top: calc(100% + 4px); z-index: 8; max-height: 320px; overflow-y: auto;
+  background: var(--card); border: 1.5px solid var(--accent); border-radius: 12px; box-shadow: 0 8px 24px rgba(1, 30, 65, .18);
+}
+.sugg .opt { display: grid; grid-template-columns: auto 1fr; column-gap: 10px; padding: 9px 12px; cursor: pointer; border-bottom: 1px solid var(--line); font-size: 14.5px; }
+.sugg .opt:last-child { border-bottom: 0; }
+.sugg .opt b { grid-row: span 2; align-self: center; font-family: ui-monospace, Menlo, Consolas, monospace; color: var(--brand); }
+.sugg .opt .kh { color: var(--muted); font-size: 13.5px; }
+.sugg .opt.on, .sugg .opt:hover { background: var(--soft); }
+
+/* OT date: holiday / Sunday / regular day next to the date. */
+.dayinfo { display: flex; align-items: center; min-height: 48px; padding: 6px 12px; border-radius: 12px; border: 1.5px dashed var(--line); font-size: 14px; line-height: 1.35; }
+.dayinfo .hol { color: var(--bad); font-weight: 700; }
+.dayinfo .sun { color: var(--warn); font-weight: 700; }
+.dayinfo .norm { color: var(--muted); }

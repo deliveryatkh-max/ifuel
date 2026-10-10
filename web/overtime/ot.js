@@ -13,7 +13,7 @@
   const set = (k, v) => { try { v == null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch (e) { /* private mode */ } };
   const getJ = (k, d) => { try { return JSON.parse(get(k)) || d; } catch (e) { return d; } };
 
-  const K = { cfg: 'ot_cfg', id: 'ot_last_id', mine: 'ot_mine', items: 'ot_items', draft: 'ot_draft' };
+  const K = { cfg: 'ot_cfg', id: 'ot_last_id', mine: 'ot_mine', items: 'ot_items', draft: 'ot_draft', people: 'ot_people' };
 
   // ---------- server ----------
   const ERR_KM = {
@@ -23,12 +23,12 @@
     BUSY: 'ប្រព័ន្ធកំពុងរវល់។ សូមព្យាយាមម្តងទៀត។',
     LIMIT: 'សំណើច្រើនពេកសម្រាប់លេខកាតនេះ។ សូមរង់ចាំបន្តិច។',
     SAVE: 'មិនអាចរក្សាទុកសំណើបានទេ។ សូមព្យាយាមម្តងទៀត។',
-    GPS: 'ត្រូវការទីតាំង។ អ្នកត្រូវនៅជិតការដ្ឋាន។',
+    GPS: 'អ្នកត្រូវនៅជិតកន្លែងធ្វើការរបស់អ្នក។',
   };
   function niceError(e) {
     const code = e.code || '';
     if (code === 'DUPLICATE_OT') return t('អ្នកមានថែមម៉ោងនៅពេលនេះរួចហើយ។ ', '') + e.message;
-    if (ERR_KM[code] && (window.LANG && LANG.get() === 'km')) return ERR_KM[code] + (code === 'GPS' ? ' (' + e.message + ')' : '');
+    if (ERR_KM[code] && (window.LANG && LANG.get() === 'km')) return ERR_KM[code];
     return e.message;
   }
 
@@ -112,9 +112,12 @@
       <form id="form" novalidate autocomplete="off">
         <section class="card">
           <h2><span class="n">1</span>${t('បុគ្គលិក', 'Employee')}</h2>
-          <label class="f" for="empId">${t('លេខកាតបុគ្គលិក', 'Employee ID')} <span class="req">*</span></label>
+          <label class="f" for="empId">${t('លេខកាត ឬឈ្មោះបុគ្គលិក', 'Employee ID or name')} <span class="req">*</span></label>
           <div class="idrow">
-            <input class="in${state.lookupErr ? ' err' : ''}" id="empId" inputmode="numeric" autocomplete="off" maxlength="20" placeholder="100027" value="${esc(idVal)}">
+            <div class="search">
+              <input class="in${state.lookupErr ? ' err' : ''}" id="empId" autocomplete="off" autocorrect="off" spellcheck="false" maxlength="60" placeholder="${esc(t('ឧ. 100027 ឬ ទូច អេ ឬ TOUCH E', 'e.g. 100027, TOUCH E or ទូច អេ'))}" value="${esc(idVal)}" role="combobox" aria-autocomplete="list" aria-controls="sugg" aria-expanded="false">
+              <div class="sugg" id="sugg" role="listbox" hidden></div>
+            </div>
             <button type="button" class="btn" id="findBtn" ${state.lookingUp ? 'disabled' : ''}>${state.lookingUp ? '<span class="sp"></span>' : '🔎'} ${t('ស្វែងរក', 'Find')}</button>
           </div>
           ${state.lookupErr ? `<div class="msg-err" role="alert">${esc(state.lookupErr)}</div>` : ''}
@@ -132,7 +135,10 @@
           <h2><span class="n">2</span>${t('ព័ត៌មានថែមម៉ោង', 'OT details')}</h2>
           <div class="field">
             <label class="f" for="otDate">${t('ថ្ងៃធ្វើថែមម៉ោង', 'OT date')} <span class="req">*</span></label>
-            <input class="in" type="date" id="otDate" value="${esc(d.date)}" required>
+            <div class="row2">
+              <input class="in" type="date" id="otDate" value="${esc(d.date)}" required>
+              <div class="dayinfo" id="dayInfo" aria-live="polite">${dayHtml(d.date)}</div>
+            </div>
           </div>
           <div class="field row2">
             <div>
@@ -152,7 +158,7 @@
             ${reasons.length ? `<div class="chips">${reasons.map(r => `<button type="button" class="chip${d.reason === r ? ' on' : ''}" data-r="${esc(r)}">${esc(r)}</button>`).join('')}</div>` : ''}
             <textarea class="in" id="otReason" maxlength="500" placeholder="${esc(t('ឧ. រៀបចំទំនិញសម្រាប់ដឹកជញ្ជូន', 'e.g. Preparing goods for delivery'))}">${esc(d.reason || '')}</textarea>
           </div>
-          ${c.needGps ? `<div class="hint">📍 ${t('ត្រូវការទីតាំងរបស់អ្នក ហើយអ្នកត្រូវនៅក្នុងចម្ងាយ', 'Your location is needed. You must be within')} ${esc(c.radius)} m ${t('ពីការដ្ឋាន។', 'of the site.')}</div>` : ''}
+          ${c.needGps ? `<div class="hint">📍 ${t('ត្រូវការទីតាំងរបស់អ្នក ហើយអ្នកត្រូវនៅក្នុងចម្ងាយ', 'Your location is needed. You must be within')} ${esc(c.radius)} m ${t('ពីកន្លែងធ្វើការរបស់អ្នក។', 'of your workplace.')}</div>` : ''}
         </section>
 
         ${state.sendErr ? `<div class="alert bad" role="alert" style="margin:0 0 12px">${esc(state.sendErr)}</div>` : ''}
@@ -165,16 +171,37 @@
     let idTimer = 0;
     idEl.addEventListener('input', () => {
       const v = idEl.value.trim();
-      if (state.emp && state.emp.id !== v) { state.emp = null; state.lookupErr = ''; renderNew(true); $('#empId').focus(); placeCaret(); return; }
+      if (state.emp && state.emp.id !== v) { state.emp = null; state.lookupErr = ''; renderNew(true); $('#empId').focus(); placeCaret(); showSugg(v); return; }
       clearTimeout(idTimer);
-      if (v.length >= 6) idTimer = setTimeout(() => lookup(v), 450);
+      const hits = showSugg(v);
+      // A complete ID typed in full is looked up straight away.
+      if (/^\d{4,}$/.test(v) && hits.some(p => p.id === v)) idTimer = setTimeout(() => lookup(v), 250);
+      else if (/^\d{6,}$/.test(v) && !people().length) idTimer = setTimeout(() => lookup(v), 450);
     });
-    idEl.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); lookup(idEl.value.trim()); } });
-    idEl.addEventListener('blur', () => { const v = idEl.value.trim(); if (v && (!state.emp || state.emp.id !== v) && !state.lookingUp) lookup(v); });
-    $('#findBtn').onclick = () => lookup(idEl.value.trim());
+    idEl.addEventListener('focus', () => { if (!state.emp) showSugg(idEl.value.trim()); });
+    idEl.addEventListener('keydown', e => {
+      const items = Array.from(document.querySelectorAll('#sugg .opt'));
+      const on = items.findIndex(x => x.classList.contains('on'));
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        if (!items.length) return;
+        e.preventDefault();
+        const n = (on + (e.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length;
+        items.forEach((x, i) => x.classList.toggle('on', i === n));
+      } else if (e.key === 'Enter') { e.preventDefault(); find(on >= 0 ? items[on].dataset.id : null); }
+      else if (e.key === 'Escape') hideSugg();
+    });
+    idEl.addEventListener('blur', () => setTimeout(() => {
+      hideSugg();
+      const v = idEl.value.trim();
+      if (/^\d+$/.test(v) && (!state.emp || state.emp.id !== v) && !state.lookingUp) lookup(v);
+    }, 180));
+    $('#sugg').addEventListener('mousedown', e => e.preventDefault());   // keep focus so the tap lands
+    $('#sugg').addEventListener('click', e => { const o = e.target.closest('.opt'); if (o) pick(o.dataset.id); });
+    $('#findBtn').onclick = () => find(null);
 
     const onTime = () => {
       d.date = $('#otDate').value; d.start = $('#otStart').value; d.end = $('#otEnd').value; saveDraft();
+      $('#dayInfo').innerHTML = dayHtml(d.date);
       $('#total').innerHTML = totalHtml(calc(d.start, d.end, (cfg || {}).overnight !== false));
     };
     ['#otDate', '#otStart', '#otEnd'].forEach(s => { $(s).addEventListener('input', onTime); $(s).addEventListener('change', onTime); });
@@ -189,6 +216,71 @@
     $('#form').onsubmit = e => { e.preventDefault(); submit(); };
   }
   function placeCaret() { const el = $('#empId'); if (el) { const n = el.value.length; try { el.setSelectionRange(n, n); } catch (e) { /* number input */ } } }
+
+  // ---------- employee search (ID, English or Khmer name) ----------
+  const people = () => (state.people || []);
+  const fold = s => String(s || '').toLowerCase().replace(/[\s.\-_]+/g, '');
+  function search(q) {
+    const f = fold(q);
+    if (!f) return [];
+    const out = [];
+    for (const p of people()) {
+      const id = fold(p.id), en = fold(p.en), kh = fold(p.kh);
+      let score = -1;
+      if (id === f) score = 0;
+      else if (id.startsWith(f)) score = 1;
+      else if (en.startsWith(f) || kh.startsWith(f)) score = 2;
+      else if (en.includes(f) || kh.includes(f) || id.includes(f)) score = 3;
+      if (score >= 0) out.push({ p, score });
+    }
+    out.sort((a, b) => a.score - b.score || a.p.en.localeCompare(b.p.en));
+    return out.slice(0, 8).map(x => x.p);
+  }
+  function showSugg(q) {
+    const box = $('#sugg');
+    if (!box) return [];
+    const hits = state.emp ? [] : search(q);
+    if (!hits.length || (hits.length === 1 && hits[0].id === q.trim())) { hideSugg(); return hits; }
+    box.innerHTML = hits.map((p, i) => `<div class="opt${i === 0 ? ' on' : ''}" role="option" data-id="${esc(p.id)}"><b>${esc(p.id)}</b><span>${esc(p.en)}</span><span class="kh">${esc(p.kh || '')}</span></div>`).join('');
+    box.hidden = false;
+    $('#empId').setAttribute('aria-expanded', 'true');
+    return hits;
+  }
+  function hideSugg() { const box = $('#sugg'); if (box) { box.hidden = true; box.innerHTML = ''; } const el = $('#empId'); if (el) el.setAttribute('aria-expanded', 'false'); }
+  function pick(id) { hideSugg(); const el = $('#empId'); if (el) el.value = id; lookup(id); }
+  function find(chosen) {
+    const v = $('#empId').value.trim();
+    if (chosen) return pick(chosen);
+    if (!v) return lookup('');
+    const hits = search(v);
+    const exact = hits.find(p => p.id === v);
+    if (exact || hits.length === 1) return pick((exact || hits[0]).id);
+    if (/^[A-Za-z0-9-]{1,20}$/.test(v) && /\d/.test(v)) return lookup(v);   // an ID not in the saved list yet
+    if (hits.length) { showSugg(v); return; }
+    state.emp = null; state.lookupErr = t('រកមិនឃើញបុគ្គលិកដែលមានលេខកាត ឬឈ្មោះនេះទេ។', 'No employee found with that ID or name.'); renderNew(true);
+  }
+  async function loadPeople() {
+    const saved = getJ(K.people, null);
+    if (saved && saved.list) state.people = saved.list;
+    if (saved && Date.now() - saved.at < 10 * 60000) return;
+    try {
+      const r = await api('employees');
+      state.people = r.list || [];
+      set(K.people, JSON.stringify({ at: Date.now(), list: state.people }));
+      const el = $('#empId');
+      if (el && document.activeElement === el && !state.emp) showSugg(el.value.trim());
+    } catch (e) { /* the ID box still works by exact ID */ }
+  }
+
+  // ---------- OT date: public holiday from the Setting sheet ----------
+  function dayHtml(ymd) {
+    if (!ymd) return '';
+    const h = ((cfg || {}).holidays || []).find(x => x.date === ymd);
+    if (h) return `<span class="hol">🎉 ${esc(t(h.kh || h.en, h.en || h.kh))}</span>`;
+    const dow = new Date(ymd + 'T00:00:00').getDay();
+    if (dow === 0) return `<span class="sun">🗓️ ${t('ថ្ងៃអាទិត្យ', 'Sunday')}</span>`;
+    return `<span class="norm">${t('ថ្ងៃធ្វើការធម្មតា', 'Regular workday')}</span>`;
+  }
 
   function totalHtml(c) {
     if (!c) return `<span>${t('ម៉ោងថែមសរុប', 'Total OT hours')}</span><b>—</b>`;
@@ -387,7 +479,9 @@
     };
     const db = getJ('ot_demo_db', {});
     return wait(350).then(() => {
-      if (action === 'config') return { reasons: ['ធ្វើការថ្ងៃបុណ្យ...', 'រៀបចំទំនិញសម្រាប់ដឹកជញ្ជូន...'], overnight: true, needGps: false, maxHours: null, today: localYmd() };
+      if (action === 'config') return { reasons: ['ធ្វើការថ្ងៃបុណ្យ...', 'រៀបចំទំនិញសម្រាប់ដឹកជញ្ជូន...'], overnight: true, needGps: false, maxHours: null, today: localYmd(),
+        holidays: [{ date: '2026-10-10', en: 'Phcum Ben Festival', kh: 'ពិធីបុណ្យភ្ជុំបិណ្ឌ' }, { date: '2026-10-15', en: "Commemoration Day of King's Father", kh: 'ទិវាប្រារព្ធពិធីគោរពព្រះវិញ្ញាណក្ខន្ធ ព្រះករុណា ព្រះបាទសម្តេចព្រះ នរោត្តម សីហនុ' }] };
+      if (action === 'employees') return { list: Object.keys(EMP).map(k => ({ id: EMP[k].id, en: EMP[k].en, kh: EMP[k].kh })) };
       if (action === 'lookup') { const e = EMP[p.id]; if (!e) throw Object.assign(new Error('Employee ID not found.'), { code: 'NOTFOUND' }); return e; }
       if (action === 'submit') {
         if (db['k_' + p.key]) return { reqId: db['k_' + p.key], status: 'Pending', repeated: true };
@@ -407,5 +501,6 @@
   // ---------- start ----------
   renderNew();
   loadConfig();
+  loadPeople();
   if (get(K.id) && !state.emp) lookup(get(K.id));
 })();
