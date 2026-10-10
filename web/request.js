@@ -4,6 +4,7 @@
 (function () {
   'use strict';
   const t = (km, en) => (window.LANG ? LANG.t(km, en) : km);
+  const EMP_MIN = 100000, EMP_MAX = 190000;   // employee ID range (Kim, 10 Oct 2026); the server checks it too
   const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
   const CSS = `
@@ -78,7 +79,7 @@
           <label><span>${t('ឈ្មោះពេញ', 'Full name')} <i>*</i></span>
             <input name="fullName" autocomplete="name" maxlength="100" value="${esc(d.fullName || '')}" required></label>
           <label><span>${t('លេខសម្គាល់បុគ្គលិក', 'Employee ID number')} <i>*</i></span>
-            <input name="employeeId" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="20" autocomplete="off" value="${esc(d.employeeId || '')}" required></label>
+            <input name="employeeId" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="off" placeholder="${EMP_MIN} – ${EMP_MAX}" value="${esc(d.employeeId || '')}" required></label>
           <label><span>${t('ផ្នែក', 'Department')} <i>*</i></span>
             ${list.length
               ? `<select name="department" required><option value="">${t('— ជ្រើសរើស —', '— Choose —')}</option>${list.map(x => `<option${x === d.department ? ' selected' : ''}>${esc(x)}</option>`).join('')}</select>`
@@ -101,6 +102,11 @@
         e.preventDefault();
         const p = { fullName: f.fullName.value.trim(), employeeId: f.employeeId.value.trim(), department: f.department.value.trim() };
         const miss = !p.fullName ? f.fullName : !p.employeeId ? f.employeeId : !p.department ? f.department : null;
+        if (!miss && !(+p.employeeId >= EMP_MIN && +p.employeeId <= EMP_MAX)) {
+          box.querySelector('.arq-err').innerHTML = `<div class="arq-msg bad">${t(`លេខសម្គាល់បុគ្គលិក ត្រូវជាលេខពី ${EMP_MIN} ដល់ ${EMP_MAX}`, `Employee ID must be a number from ${EMP_MIN} to ${EMP_MAX}`)}</div>`;
+          f.employeeId.focus();
+          return;
+        }
         if (miss) {
           box.querySelector('.arq-err').innerHTML = `<div class="arq-msg bad">${t('សូមបំពេញគ្រប់ចន្លោះដែលមានសញ្ញា *', 'Please fill in every field marked *')}</div>`;
           miss.focus();

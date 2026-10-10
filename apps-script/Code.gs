@@ -276,6 +276,7 @@ function verifyToken_(token) {
 
 const DEPT_SHEET = 'Department';
 const REQ_COLS = ['Employee ID', 'Department'];
+const EMP_ID_MIN = 100000, EMP_ID_MAX = 190000;   // Kim, 10 Oct 2026
 
 /** Who is signed in (Google token or this app's session), without needing a Users row. */
 function identity_(token) {
@@ -337,7 +338,9 @@ function requestAccess_(token, p) {
   if (form) {
     if (!name) throw new Error('Full name is required. / សូមបញ្ចូលឈ្មោះពេញ។');
     if (!empId) throw new Error('Employee ID is required. / សូមបញ្ចូលលេខសម្គាល់បុគ្គលិក។');
-    if (!/^\d+$/.test(empId)) throw new Error('Employee ID must be numbers only. / លេខសម្គាល់បុគ្គលិក ត្រូវជាលេខប៉ុណ្ណោះ។');
+    if (!/^\d+$/.test(empId) || +empId < EMP_ID_MIN || +empId > EMP_ID_MAX) {
+      throw new Error('Employee ID must be a number from ' + EMP_ID_MIN + ' to ' + EMP_ID_MAX + '. / លេខសម្គាល់បុគ្គលិក ត្រូវជាលេខពី ' + EMP_ID_MIN + ' ដល់ ' + EMP_ID_MAX + '។');
+    }
     if (!dept) throw new Error('Department is required. / សូមជ្រើសរើសផ្នែក។');
     const list = departments_();
     if (list.length && list.indexOf(dept) < 0) throw new Error('Choose a department from the list. / សូមជ្រើសរើសផ្នែកពីបញ្ជី។');
