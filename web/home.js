@@ -8,7 +8,7 @@
   const APPS = [
     { key: 'fuel', kh: 'ចាក់សាំង', en: 'Fuel Refill', url: 'fuel/' },
     { key: 'transport', kh: 'ដឹកជញ្ជូន', en: 'Transport', url: '' },
-    { key: 'overtime', kh: 'ថែមម៉ោង', en: 'Overtime', url: '' },
+    { key: 'overtime', kh: 'ថែមម៉ោង', en: 'Overtime', url: 'overtime/' },
     { key: 'location', kh: 'ទីតាំងថ្មី', en: 'New Location', url: '' },
     { key: 'dashboard', kh: 'Dashboard', en: 'Fuel Dashboard', url: 'dashboard/' },
   ];
