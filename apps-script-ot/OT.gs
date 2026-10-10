@@ -70,6 +70,7 @@ function doPost(e) {
     switch (body.action) {
       case 'config': return json_({ ok: true, data: publicConfig_() });
       case 'lookup': return json_({ ok: true, data: lookupPublic_(p.id) });
+      case 'employees': return json_({ ok: true, data: employeeList_() });
       case 'submit': return json_({ ok: true, data: submit_(p) });
       case 'status': return json_({ ok: true, data: statusFor_(p) });
       default: return json_({ ok: false, error: 'Unknown action' });
@@ -176,8 +177,57 @@ function publicConfig_() {
   }
   return {
     reasons, maxHours: s.maxHours, maxPast: s.maxPast, maxFuture: s.maxFuture, overnight: s.overnight,
-    needGps: !!s.site, radius: s.site ? s.site.radius : null, today: todayYmd_(),
+    needGps: !!s.site, radius: s.site ? s.site.radius : null, today: todayYmd_(), holidays: holidays_(),
   };
+}
+
+// Khmer names for the holidays listed (in English) in the Setting sheet. A Khmer name typed in the sheet
+// (a column whose header has "Khmer", or the column right after "Public Holiday") always wins.
+const HOLIDAY_KH = {
+  'international new year day': 'ទិវាចូលឆ្នាំសកល',
+  'victory day over genocide': 'ទិវាជ័យជម្នះលើរបបប្រល័យពូជសាសន៍',
+  "international women's day": 'ទិវានារីអន្តរជាតិ',
+  'khmer new year days': 'ពិធីបុណ្យចូលឆ្នាំថ្មីប្រពៃណីជាតិ',
+  'khmer new year day': 'ពិធីបុណ្យចូលឆ្នាំថ្មីប្រពៃណីជាតិ',
+  'international labor day & visak bochea day': 'ទិវាពលកម្មអន្តរជាតិ និងពិធីបុណ្យវិសាខបូជា',
+  'international labor day': 'ទិវាពលកម្មអន្តរជាតិ',
+  'visak bochea day': 'ពិធីបុណ្យវិសាខបូជា',
+  'royal plowing ceremony': 'ព្រះរាជពិធីច្រត់ព្រះនង្គ័ល',
+  "king norodom sihamoni's birthday": 'ព្រះរាជពិធីបុណ្យចម្រើនព្រះជន្ម ព្រះករុណា ព្រះបាទសម្តេចព្រះបរមនាថ នរោត្តម សីហមុនី',
+  "queen monineath's birthday": 'ព្រះរាជពិធីបុណ្យចម្រើនព្រះជន្ម សម្តេចព្រះមហាក្សត្រី នរោត្តម មុនិនាថ សីហនុ',
+  'constitutional day': 'ទិវាប្រកាសរដ្ឋធម្មនុញ្ញ',
+  'phcum ben festival': 'ពិធីបុណ្យភ្ជុំបិណ្ឌ',
+  'pchum ben festival': 'ពិធីបុណ្យភ្ជុំបិណ្ឌ',
+  "commemoration day of king's father": 'ទិវាប្រារព្ធពិធីគោរពព្រះវិញ្ញាណក្ខន្ធ ព្រះករុណា ព្រះបាទសម្តេចព្រះ នរោត្តម សីហនុ',
+  'coronation day of king sihamoni': 'ព្រះរាជពិធីគ្រងព្រះបរមរាជសម្បត្តិ ព្រះករុណា ព្រះបាទសម្តេចព្រះបរមនាថ នរោត្តម សីហមុនី',
+  'national independence day': 'ពិធីបុណ្យឯករាជ្យជាតិ',
+  'water festival day': 'ព្រះរាជពិធីបុណ្យអុំទូក បណ្តែតប្រទីប និងសំពះព្រះខែ អកអំបុក',
+  'peace day in cambodia': 'ទិវាសន្តិភាពនៅកម្ពុជា',
+};
+
+// Public holidays from the "Setting" tab: the "Public Holiday" column and the "Date" column just left of it.
+function holidays_() {
+  const sh = ss_().getSheetByName('Setting');
+  if (!sh || sh.getLastRow() < 2) return [];
+  const v = sh.getDataRange().getValues();
+  const head = v[0].map(norm_);
+  const hc = head.indexOf('publicholiday');
+  if (hc < 0) return [];
+  let dc = -1;
+  for (let c = hc - 1; c >= 0; c--) if (head[c] === 'date') { dc = c; break; }
+  if (dc < 0) return [];
+  const isKh = x => /[\u1780-\u17FF]/.test(String(x || ''));
+  let kc = head.findIndex(h => h.indexOf('khmer') >= 0);
+  if (kc < 0 && hc + 1 < head.length && !head[hc + 1] && v.slice(1).some(r => isKh(r[hc + 1]))) kc = hc + 1;
+  const out = [];
+  for (let r = 1; r < v.length; r++) {
+    const d = v[r][dc];
+    const en = String(v[r][hc] || '').trim();
+    if (!(d instanceof Date) || (!en && !(kc >= 0 && v[r][kc]))) continue;
+    const typed = kc >= 0 && isKh(v[r][kc]) ? String(v[r][kc]).trim() : (isKh(en) ? en : '');
+    out.push({ date: fmt_(d, 'yyyy-MM-dd'), en: isKh(en) ? '' : en, kh: typed || HOLIDAY_KH[en.toLowerCase()] || '' });
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------- employees & approvers
@@ -273,6 +323,19 @@ function employeesCached_() {
   const e = readEmployees_();
   try { cache.put('emp_v1', JSON.stringify(e), 120); } catch (err) { /* large list: skip cache */ }
   return e;
+}
+
+// For the search box: ID, English name and Khmer name of every employee (no manager or Telegram details).
+function employeeList_() {
+  const employees = employeesCached_();
+  const kh = khmerFromHistory_();
+  const list = [];
+  Object.keys(employees).forEach(id => {
+    const e = employees[id][0];
+    list.push({ id, en: e.en, kh: e.kh || kh[id] || '' });
+  });
+  list.sort((a, b) => a.en.localeCompare(b.en));
+  return { list };
 }
 
 function lookupPublic_(id) {
