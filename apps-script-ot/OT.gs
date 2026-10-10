@@ -812,8 +812,9 @@ function setup() {
 
 /** Step 3 (after deploying the web app). Points the bot at this script through the Cloudflare relay. */
 function connectTelegram() {
-  const url = prop_('OT_WEB_APP_URL') || ScriptApp.getService().getUrl() || '';
-  const m = url.match(/\/macros\/s\/([A-Za-z0-9_-]+)\/exec$/);
+  // Apps Script often reports the editor's /dev address here, so the /exec URL in OT_WEB_APP_URL wins when set.
+  const url = String(prop_('OT_WEB_APP_URL') || ScriptApp.getService().getUrl() || '').trim();
+  const m = url.match(/\/macros\/(?:a\/[^/]+\/)?s\/([A-Za-z0-9_-]+)\/exec\b/) || url.match(/\/macros\/s\/([A-Za-z0-9_-]+)\/exec\b/);
   if (!m) throw new Error('Deploy the web app first (Deploy → New deployment → Web app). If this still fails, put the /exec URL in Script Property OT_WEB_APP_URL.');
   const me = tg_('getMe', {});
   tg_('setWebhook', {
