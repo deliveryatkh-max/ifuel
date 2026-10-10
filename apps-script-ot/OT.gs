@@ -100,6 +100,8 @@ function idText_(v) {
 }
 
 function ss_() { return SpreadsheetApp.getActive(); }
+// A sheet with no empty rows left at the bottom gets one more, so a new row can always be written.
+function ensureRows_(sh, row) { const max = sh.getMaxRows(); if (row > max) sh.insertRowsAfter(max, row - max); }
 function sheet_(name) {
   const sh = ss_().getSheetByName(name);
   if (!sh) fail_('SETUP', 'The sheet tab "' + name + '" is missing.');
@@ -458,6 +460,7 @@ function submit_(p) {
     put('approver', emp.manager);
     put('note', route.ok ? '' : route.msg);
 
+    ensureRows_(ds.sh, row);
     if (last >= 2) ds.sh.getRange(last, 1, 1, ds.width).copyTo(ds.sh.getRange(row, 1, 1, ds.width), SpreadsheetApp.CopyPasteType.PASTE_FORMAT, false);
     ds.sh.getRange(row, 1, 1, ds.width).setValues([vals]);
     if (ds.map.date != null) ds.sh.getRange(row, ds.map.date + 1).setNumberFormat('d-mmm-yy');
@@ -635,6 +638,7 @@ function registerApprover_(m) {
     if (other) return 'conflict';
     const tgName = [from.first_name, from.last_name].filter(Boolean).join(' ');
     const row = same.length ? same[0].row : sh.getLastRow() + 1;
+    ensureRows_(sh, row);
     sh.getRange(row, 1, 1, APPROVER_COLS.length).setValues([['@' + username, manager, chatId, tgName, new Date(), 'Yes']]);
     sh.getRange(row, 3).setNumberFormat('@');
     return same.length && same[0].chatId === chatId ? 'again' : 'new';
