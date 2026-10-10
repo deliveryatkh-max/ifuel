@@ -271,10 +271,10 @@ function verifyToken_(token) {
 
 // ---------- Request to Admin ----------
 // A person signed in with Google but not allowed yet fills in a short form (full name, employee ID,
-// department from the "Departments" sheet). The answers go into the Users sheet with Active = No, the
+// department from the "Department" sheet). The answers go into the Users sheet with Active = No, the
 // usual apps already ticked, and a note goes to the Telegram group. The admin switches Active to Yes.
 
-const DEPT_SHEET = 'Departments';
+const DEPT_SHEET = 'Department';
 const REQ_COLS = ['Employee ID', 'Department'];
 
 /** Who is signed in (Google token or this app's session), without needing a Users row. */
@@ -283,18 +283,26 @@ function identity_(token) {
   return own ? { email: own.email, name: '' } : verifyToken_(token);
 }
 
-/** Department names for the drop-down: column "Department" of the Departments sheet (Active = No hides one). */
+/**
+ * Department names for the drop-down, from the "Department" sheet (Kim, 10 Oct 2026): the column whose
+ * header contains "Department" or ផ្នែក, or the first column if none does. Row 1 is the header; Active = No hides a department.
+ */
 function departments_() {
   const ss = SpreadsheetApp.getActive();
-  if (!ss.getSheetByName(DEPT_SHEET)) {
-    const sheet = ss.insertSheet(DEPT_SHEET);
-    sheet.getRange(1, 1, 1, 2).setValues([['Department', 'Active']]).setFontWeight('bold');
+  const sheet = ss.getSheetByName(DEPT_SHEET);
+  if (!sheet) {
+    ss.insertSheet(DEPT_SHEET).getRange(1, 1, 1, 2).setValues([['Department', 'Active']]).setFontWeight('bold');
     return [];
   }
+  if (sheet.getLastRow() < 2) return [];
+  const values = sheet.getDataRange().getValues();
+  const header = values.shift().map(h => String(h).trim().toLowerCase());
+  const name = Math.max(0, header.findIndex(h => h.indexOf('department') >= 0 || h.indexOf('ផ្នែក') >= 0));
+  const active = header.indexOf('active');
   const seen = {};
-  return readTable_(DEPT_SHEET)
-    .filter(r => !isNo_(r['Active']))
-    .map(r => String(r['Department'] || '').trim())
+  return values
+    .filter(r => active < 0 || !isNo_(r[active]))
+    .map(r => String(r[name] || '').trim())
     .filter(d => d && !seen[d] && (seen[d] = true));
 }
 
@@ -323,11 +331,13 @@ function requestAccess_(token, p) {
   // The form sends fullName, employeeId and department; older app versions send nothing.
   const form = p && p.fullName !== undefined;
   const name = String((form ? p.fullName : info.name) || '').replace(/\s+/g, ' ').trim().slice(0, 100);
-  const empId = form ? String(p.employeeId || '').trim().slice(0, 40) : '';
+  // Employee ID is a number (Khmer digits accepted); kept as text so leading zeros stay.
+  const empId = form ? String(p.employeeId || '').replace(/[០-៩]/g, d => String('០១២៣៤៥៦៧៨៩'.indexOf(d))).replace(/\s+/g, '').slice(0, 20) : '';
   const dept = form ? String(p.department || '').trim().slice(0, 100) : '';
   if (form) {
     if (!name) throw new Error('Full name is required. / សូមបញ្ចូលឈ្មោះពេញ។');
     if (!empId) throw new Error('Employee ID is required. / សូមបញ្ចូលលេខសម្គាល់បុគ្គលិក។');
+    if (!/^\d+$/.test(empId)) throw new Error('Employee ID must be numbers only. / លេខសម្គាល់បុគ្គលិក ត្រូវជាលេខប៉ុណ្ណោះ។');
     if (!dept) throw new Error('Department is required. / សូមជ្រើសរើសផ្នែក។');
     const list = departments_();
     if (list.length && list.indexOf(dept) < 0) throw new Error('Choose a department from the list. / សូមជ្រើសរើសផ្នែកពីបញ្ជី។');

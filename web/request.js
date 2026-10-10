@@ -1,5 +1,5 @@
 // "Request to Admin" form, shared by the home menu and the Fuel app: a person who is signed in but not
-// allowed yet gives their full name, employee ID and department (drop-down from the Departments sheet).
+// allowed yet gives their full name, employee ID (numbers only) and department (drop-down from the Department sheet).
 // Usage: AccessRequest.open({ call: (action, payload) => Promise, onDone: status => {} })
 (function () {
   'use strict';
@@ -78,7 +78,7 @@
           <label><span>${t('ឈ្មោះពេញ', 'Full name')} <i>*</i></span>
             <input name="fullName" autocomplete="name" maxlength="100" value="${esc(d.fullName || '')}" required></label>
           <label><span>${t('លេខសម្គាល់បុគ្គលិក', 'Employee ID number')} <i>*</i></span>
-            <input name="employeeId" maxlength="40" value="${esc(d.employeeId || '')}" autocapitalize="characters" required></label>
+            <input name="employeeId" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="20" autocomplete="off" value="${esc(d.employeeId || '')}" required></label>
           <label><span>${t('ផ្នែក', 'Department')} <i>*</i></span>
             ${list.length
               ? `<select name="department" required><option value="">${t('— ជ្រើសរើស —', '— Choose —')}</option>${list.map(x => `<option${x === d.department ? ' selected' : ''}>${esc(x)}</option>`).join('')}</select>`
@@ -90,6 +90,11 @@
         </form>`;
       const f = box.querySelector('form');
       box.querySelector('[data-x]').onclick = close;
+      // Numbers only: Khmer digits become 0-9, anything else is dropped as it is typed.
+      f.employeeId.addEventListener('input', () => {
+        const v = f.employeeId.value.replace(/[០-៩]/g, x => String('០១២៣៤៥៦៧៨៩'.indexOf(x))).replace(/\D/g, '');
+        if (v !== f.employeeId.value) f.employeeId.value = v;
+      });
       const first = [...f.querySelectorAll('input:not([readonly]),select')].find(x => !x.value);
       if (first) setTimeout(() => first.focus(), 250);
       f.onsubmit = async e => {
