@@ -115,6 +115,7 @@ input.in:focus, textarea.in:focus { border-color: var(--accent); box-shadow: 0 0
 .badge.approved { background: var(--ok-soft); color: var(--ok); }
 .badge.rejected { background: var(--bad-soft); color: var(--bad); }
 .badge.follow { background: var(--soft); color: var(--brand); }
+.badge.recorded { background: var(--soft); color: var(--muted); }
 
 .list { display: grid; gap: 10px; }
 .item { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 12px 14px; box-shadow: var(--shadow); }
@@ -184,3 +185,16 @@ input.in:focus, textarea.in:focus { border-color: var(--accent); box-shadow: 0 0
 /* Auto date & time: read-only boxes. */
 .in.ro { display: flex; align-items: center; width: 100%; min-height: 52px; padding: 10px 14px; border-radius: 12px; border: 1.5px solid transparent; background: var(--soft); font-size: 17px; font-weight: 700; color: var(--text); cursor: default; user-select: none; }
 .autohint { margin: -4px 0 12px; }
+
+/* My requests: total OT between two dates. */
+.sumcard .who { font-size: 15px; color: var(--muted); }
+.sumcard .who b { color: var(--text); font-family: ui-monospace, Menlo, Consolas, monospace; margin-right: 6px; }
+.sumtotal { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 0 12px; margin-top: 4px; padding: 14px 16px; border-radius: 14px; background: var(--brand); color: var(--on-brand); }
+.sumtotal span { font-size: 15px; font-weight: 600; }
+.sumtotal b { grid-row: span 2; font-size: 34px; line-height: 1; }
+.sumtotal b small { font-size: 15px; font-weight: 600; }
+.sumtotal em { font-style: normal; font-size: 13px; opacity: .85; }
+.sumparts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.sumcard .row2 > div { min-width: 0; }
+.sumcard input[type=date] { min-width: 0; width: 100%; font-size: 16px; padding: 10px 8px; }
+.sumtotal b small { display: inline; color: inherit; opacity: .9; }

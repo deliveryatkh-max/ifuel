@@ -81,6 +81,7 @@ function doPost(e) {
       case 'dept': return json_({ ok: true, data: deptPublic_(p.code) });
       case 'submit': return json_({ ok: true, data: submit_(p) });
       case 'status': return json_({ ok: true, data: statusFor_(p) });
+      case 'summary': return json_({ ok: true, data: summary_(p) });
       default: return json_({ ok: false, error: 'Unknown action' });
     }
   } catch (err) {
@@ -708,6 +709,47 @@ function findKeyInLog_(key) {
 
 // ---------------------------------------------------------------- status (employee view)
 // An employee sees a request only when both their Employee ID and the Request ID match.
+// "My requests" summary: every OT row of one employee between two dates, with the hour totals.
+// Opened only with the Employee ID plus one of that employee's Request IDs (kept on their phone),
+// so nobody can look up a colleague by ID alone. Old rows from before the app count as "Recorded".
+function summary_(p) {
+  const id = idText_(p.id);
+  const proof = String(p.proof || '').trim().toUpperCase();
+  const ymd = /^\d{4}-\d{2}-\d{2}$/;
+  const from = String(p.from || ''), to = String(p.to || '');
+  if (!id || !/^OT-\d{6}-[A-Z0-9]{5}$/.test(proof)) fail_('INVALID', 'Please check one of your requests first.');
+  if (!ymd.test(from) || !ymd.test(to) || from > to) fail_('INVALID', 'Please choose a valid date range.');
+  if (serialOf_(to) - serialOf_(from) > 366) fail_('INVALID', 'Please choose at most one year.');
+  const ds = dataSheet_();
+  const pr = findRequestRow_(ds, proof);
+  if (!pr || readRow_(ds, pr).id !== id) fail_('NOTFOUND', 'No request with that ID for this Employee ID.');
+  const last = ds.sh.getLastRow();
+  const v = ds.sh.getRange(2, 1, last - 1, ds.width).getValues();
+  const d = ds.sh.getRange(2, 1, last - 1, ds.width).getDisplayValues();
+  const m = ds.map, g = (row, f) => (m[f] == null ? '' : row[m[f]]);
+  const totals = { approved: 0, pending: 0, rejected: 0, recorded: 0, total: 0, count: 0 };
+  const items = [];
+  for (let i = 0; i < v.length; i++) {
+    if (idText_(g(v[i], 'id')) !== id) continue;
+    const dt = g(v[i], 'date');
+    const date = dt instanceof Date ? fmt_(dt, 'yyyy-MM-dd') : '';
+    if (!date || date < from || date > to) continue;
+    const status = String(g(v[i], 'status') || '') || 'Recorded';
+    const hours = Number(g(v[i], 'hours')) || 0;
+    const key = status === STATUS.APPROVED ? 'approved' : status === STATUS.REJECTED ? 'rejected' : status === 'Recorded' ? 'recorded' : 'pending';
+    totals[key] += hours;
+    if (key !== 'rejected') { totals.total += hours; totals.count++; }
+    items.push({
+      reqId: String(g(v[i], 'reqId') || ''), status, date, dateText: g(d[i], 'date'), from: g(d[i], 'from'), to: g(d[i], 'to'), hours,
+      reason: String(g(v[i], 'reason') || ''), manager: String(g(v[i], 'approver') || ''), reviewed: String(g(v[i], 'reviewed') || ''),
+      decided: g(d[i], 'decided'), rejectReason: String(g(v[i], 'rejectReason') || ''),
+    });
+  }
+  Object.keys(totals).forEach(k => { totals[k] = Math.round(totals[k] * 100) / 100; });
+  items.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
+  return { id, from, to, totals, items: items.slice(0, 300), more: items.length > 300 };
+}
+
 function statusFor_(p) {
   const id = idText_(p.id);
   const ids = (Array.isArray(p.requests) ? p.requests : [p.requestId]).map(x => String(x || '').trim().toUpperCase()).filter(x => /^OT-\d{6}-[A-Z0-9]{5}$/.test(x)).slice(0, 30);
