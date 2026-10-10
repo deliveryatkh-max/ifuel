@@ -567,12 +567,13 @@
   async function renderMine() {
     scanner.stop();
     state.tab = 'mine'; paintTabs();
+    // Only the person using the phone now (the last Employee ID found on the form, or checked below) is shown,
+    // never other people who used the same phone before.
     const mine = getJ(K.mine, []);
-    const ids = [];
-    mine.forEach(m => { if (ids.indexOf(m.id) < 0) ids.push(m.id); });
+    const me = (state.emp && state.emp.id) || get(K.id) || '';
+    const ids = me && mine.some(m => m.id === me) ? [me] : [];
     const today = (cfg && cfg.today) || localYmd();
-    const f = state.sumF = Object.assign({ id: ids[0] || '', from: monthStart(today), to: today }, state.sumF || {});
-    if (ids.indexOf(f.id) < 0) f.id = ids[0] || '';
+    const f = state.sumF = Object.assign({ from: monthStart(today), to: today }, state.sumF || {}, { id: me });
     const cacheKey = () => 'ot_sum_' + f.id + '_' + f.from + '_' + f.to;
     const nameOf = id => { const p = people().find(x => x.id === id); return p ? p.en + (p.kh ? ' · ' + p.kh : '') : ''; };
     const draw = (res, loading, err) => {
@@ -582,9 +583,7 @@
           ${ids.length ? `<button type="button" class="btn" id="refresh" ${loading ? 'disabled' : ''}>${loading ? '<span class="sp"></span>' : '🔄'} ${t('ផ្ទុកឡើងវិញ', 'Refresh')}</button>` : ''}</div>
         ${ids.length ? `
         <section class="card sumcard">
-          ${ids.length > 1 ? `<label class="f" for="sId">${t('បុគ្គលិក', 'Employee')}</label>
-            <select class="in" id="sId">${ids.map(id => `<option value="${esc(id)}" ${id === f.id ? 'selected' : ''}>${esc(id)}${nameOf(id) ? ' · ' + esc(nameOf(id)) : ''}</option>`).join('')}</select>`
-          : `<div class="who"><b>${esc(f.id)}</b> ${esc(nameOf(f.id))}</div>`}
+          <div class="who"><b>${esc(f.id)}</b> ${esc(nameOf(f.id))}</div>
           <div class="field row2" style="margin-top:10px">
             <div><label class="f" for="sFrom">${t('ពីថ្ងៃ', 'From')}</label><input class="in" type="date" id="sFrom" value="${esc(f.from)}" max="${esc(f.to)}"></div>
             <div><label class="f" for="sTo">${t('ដល់ថ្ងៃ', 'To')}</label><input class="in" type="date" id="sTo" value="${esc(f.to)}" min="${esc(f.from)}"></div>
@@ -604,18 +603,17 @@
         </section>
         ${err ? `<div class="alert bad" style="margin:0 0 12px">${esc(err)}</div>` : ''}
         <div class="list">${res && res.items.length ? res.items.map(itemHtml).join('') : `<div class="empty">${loading && !res ? '<div class="spinner" style="margin:20px auto"></div>' : t('គ្មានថែមម៉ោងក្នុងចន្លោះថ្ងៃនេះទេ។', 'No OT in these dates.')}</div>`}</div>`
-        : `<div class="empty">${t('មិនទាន់មានសំណើនៅលើទូរស័ព្ទនេះទេ។', 'No requests on this phone yet.')}</div>`}
+        : `<div class="empty">${me ? esc(me) + ' · ' + t('មិនទាន់មានសំណើនៅលើទូរស័ព្ទនេះទេ។ ប្រើ «ពិនិត្យសំណើ» ខាងក្រោម។', 'No requests on this phone yet. Use "Check a request" below.') : t('សូមស្វែងរកលេខកាតរបស់អ្នកនៅទំព័រ «ស្នើថ្មី» ឬប្រើ «ពិនិត្យសំណើ» ខាងក្រោម។', 'Find your Employee ID on the New request page, or use "Check a request" below.')}</div>`}
         <section class="card" style="margin-top:16px">
           <h2>🔍 ${t('ពិនិត្យសំណើ', 'Check a request')}</h2>
           <div class="field row2">
-            <div><label class="f" for="qId">${t('លេខកាតបុគ្គលិក', 'Employee ID')}</label><input class="in" id="qId" inputmode="numeric" value="${esc(get(K.id) || '')}"></div>
+            <div><label class="f" for="qId">${t('លេខកាតបុគ្គលិក', 'Employee ID')}</label><input class="in" id="qId" inputmode="numeric" value=""></div>
             <div><label class="f" for="qReq">${t('លេខសំណើ', 'Request ID')}</label><input class="in" id="qReq" placeholder="OT-261010-ABCDE" autocapitalize="characters"></div>
           </div>
           <button type="button" class="btn ok" id="qBtn" style="width:100%">${t('ពិនិត្យ', 'Check')}</button>
           <div class="hint">${t('អ្នកអាចមើលបានតែសំណើរបស់អ្នកប៉ុណ្ណោះ (ត្រូវការទាំងលេខកាត និងលេខសំណើ)។', 'You can only see your own requests (both your Employee ID and the Request ID are needed).')}</div>
         </section>`;
       if ($('#refresh')) $('#refresh').onclick = () => renderMine();
-      if ($('#sId')) $('#sId').onchange = e => { f.id = e.target.value; renderMine(); };
       const onDate = () => {
         const a = $('#sFrom').value, b = $('#sTo').value;
         if (!a || !b) return;
@@ -659,7 +657,7 @@
       const r = await api('status', { id, requests: [req] });
       if (!r.items.length) { toast(t('រកមិនឃើញសំណើនេះសម្រាប់លេខកាតនេះទេ។', 'No request with that ID for this Employee ID.')); return; }
       remember(id, req);
-      state.sumF = Object.assign(state.sumF || {}, { id });
+      set(K.id, id); if (state.emp && state.emp.id !== id) state.emp = null;
       const items = getJ(K.items, []).filter(x => x.reqId !== req).concat(r.items);
       set(K.items, JSON.stringify(items));
       renderMine();
