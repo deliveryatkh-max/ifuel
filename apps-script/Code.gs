@@ -272,7 +272,7 @@ function verifyToken_(token) {
 // ---------- Request to Admin ----------
 // A person signed in with Google but not allowed yet fills in a short form (full name, employee ID,
 // department from the "Department" sheet). The answers go into the Users sheet with Active = No, the
-// usual apps already ticked, and a note goes to the Telegram group. The admin switches Active to Yes.
+// usual apps already ticked, and a note goes to the Telegram alerts group. The admin switches Active to Yes.
 
 const DEPT_SHEET = 'Department';
 const REQ_COLS = ['Employee ID', 'Department'];
@@ -424,11 +424,13 @@ function requestAccess_(token, p) {
   }
   // One Telegram note per account every 6 hours (or when the details change), so repeated taps don't flood the group.
   const cache = CacheService.getScriptCache();
-  if (telegramReady_() && (added || changed || !cache.get('req_' + email))) {
+  // Sent to the alerts group (⚠️ ISI App Alert, Kim 10 Oct 2026); the new-refill group only while no alerts group is connected.
+  const reqChat = getSetting_('TELEGRAM_ALERT_CHAT_ID') || getSetting_('TELEGRAM_CHAT_ID');
+  if (telegramToken_() && reqChat && (added || changed || !cache.get('req_' + email))) {
     cache.put('req_' + email, '1', 21600);
     const esc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     try {
-      telegram_('sendMessage', { chat_id: getSetting_('TELEGRAM_CHAT_ID'), parse_mode: 'HTML', text: [
+      telegram_('sendMessage', { chat_id: reqChat, parse_mode: 'HTML', text: [
         '🔑 <b>ស្នើសុំប្រើកម្មវិធី / Access request</b>',
         '👤 ' + esc(name || '-'),
         empId ? '🪪 ' + esc(empId) : null,
