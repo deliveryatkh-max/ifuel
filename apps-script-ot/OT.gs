@@ -68,7 +68,7 @@ function doPost(e) {
     if (body.action === 'telegram') { handleTelegram_(body); return json_({ ok: true }); }
     const p = body.payload || {};
     switch (body.action) {
-      case 'config': return json_({ ok: true, data: publicConfig_() });
+      case 'config': return json_({ ok: true, data: Object.assign(publicConfig_(), p.withEmployees ? employeeList_() : {}) });
       case 'lookup': return json_({ ok: true, data: lookupPublic_(p.id) });
       case 'employees': return json_({ ok: true, data: employeeList_() });
       case 'submit': return json_({ ok: true, data: submit_(p) });
@@ -325,14 +325,19 @@ function employeesCached_() {
   return e;
 }
 
-// For the search box: ID, English name and Khmer name of every employee (no manager or Telegram details).
+// For the search box: ID, English name and Khmer name of every employee (no Telegram details).
+// It also carries each person's line manager name and whether that manager can get Telegram yet, so picking a
+// name fills the form at once. The server still re-checks the employee and manager on every submit.
 function employeeList_() {
   const employees = employeesCached_();
+  const approvers = readApprovers_();
   const kh = khmerFromHistory_();
   const list = [];
   Object.keys(employees).forEach(id => {
+    if (employees[id].length > 1) return;   // duplicated IDs are refused at lookup and submit
     const e = employees[id][0];
-    list.push({ id, en: e.en, kh: e.kh || kh[id] || '' });
+    const r = resolveApprover_(id, employees, approvers);
+    list.push({ id, en: e.en, kh: e.kh || kh[id] || '', manager: e.manager || '', ready: r.ok });
   });
   list.sort((a, b) => a.en.localeCompare(b.en));
   return { list };
