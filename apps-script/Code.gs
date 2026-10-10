@@ -117,6 +117,7 @@ function canUse_(user, key) {
 
 function homeApps_(p, user) {
   ensureRecapTrigger_();
+  ensureTelegramSettings_();
   const out = {
     user: { name: user.name, role: user.role },
     apps: HOME_APPS.map(a => a.key).filter(k => canUse_(user, k)),
@@ -931,6 +932,27 @@ function ensureRecapTrigger_() {
   }
 }
 
+/**
+ * Adds the TELEGRAM_ALERTS and TELEGRAM_RECAP rows (Yes) to the Settings sheet once, so they are easy to find.
+ * Change a value to No to stop that message. Rows already there are left as they are.
+ */
+function ensureTelegramSettings_() {
+  const props = PropertiesService.getScriptProperties();
+  if (props.getProperty('TG_SETTINGS_ROWS')) return;
+  try {
+    const sheet = SpreadsheetApp.getActive().getSheetByName(SHEETS.SETTINGS);
+    if (!sheet) return;
+    const keys = sheet.getDataRange().getValues().map(r => String(r[0]).trim());
+    [['TELEGRAM_ALERTS', 'Yes', 'Unusual refill alerts in the Telegram group. No = off.'],
+     ['TELEGRAM_RECAP', 'Yes', 'Monthly recap in the Telegram group on the 1st at 08:00. No = off.']]
+      .forEach(row => { if (keys.indexOf(row[0]) < 0) sheet.appendRow(row); });
+    delete tableCache_[SHEETS.SETTINGS];
+    props.setProperty('TG_SETTINGS_ROWS', String(Date.now()));
+  } catch (e) {
+    console.error('Telegram settings rows not added: ' + e);
+  }
+}
+
 /** Run by the monthly timer: sends last month's recap. */
 function sendMonthlyRecap() {
   if (!telegramReady_() || isNo_(getSetting_('TELEGRAM_RECAP'))) return;
@@ -942,6 +964,7 @@ function sendMonthlyRecap() {
 /** Run from the editor to send last month's recap now (to try it). */
 function telegramSendRecap() {
   if (!telegramReady_()) throw new Error('Telegram is not connected yet: run telegramConnect first.');
+  ensureTelegramSettings_();
   sendMonthlyRecap();
 }
 
