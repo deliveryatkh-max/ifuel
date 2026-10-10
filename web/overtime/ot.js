@@ -24,6 +24,7 @@
     LIMIT: 'សំណើច្រើនពេកសម្រាប់លេខកាតនេះ។ សូមរង់ចាំបន្តិច។',
     SAVE: 'មិនអាចរក្សាទុកសំណើបានទេ។ សូមព្យាយាមម្តងទៀត។',
     GPS: 'អ្នកត្រូវនៅជិតកន្លែងធ្វើការរបស់អ្នក។',
+    NOSHIFT: 'ម៉ោងវេនរបស់អ្នកមិនទាន់មានក្នុងបញ្ជីបុគ្គលិកទេ។ សូមទាក់ទងអ្នកគ្រប់គ្រង ឬ HR។',
     BAD_QR: 'QR Code នេះមិនត្រឹមត្រូវទេ។ សូមស្កេន QR Code របស់ផ្នែកអ្នកម្តងទៀត។',
   };
   function niceError(e) {
@@ -68,6 +69,35 @@
     return { hours: Math.round(((overnight ? e + 1440 : e) - s) / 60 * 100) / 100, overnight };
   }
 
+  // ---------- Auto date & time (OT App Settings → DATE_TIME_MODE = Auto) ----------
+  // Start = end of the employee's shift, End = now (Cambodia time, corrected by the server clock), Date = today.
+  // The server works the same times out again when the request is sent; nothing here can be edited.
+  function autoNow() {
+    const d = new Date(Date.now() + (state.skew || 0) + 7 * 3600000);   // Cambodia is UTC+7 all year
+    return { ymd: d.toISOString().slice(0, 10), min: d.getUTCHours() * 60 + d.getUTCMinutes() };
+  }
+  function autoCalc(emp) {
+    if (!emp) return null;
+    if (!emp.otStart) return { err: t(ERR_KM.NOSHIFT, 'Your shift working time is not in the employee list yet. Please ask your manager or HR to add it.') };
+    const n = autoNow(), s = toMin(emp.otStart), max = ((cfg || {}).maxAutoHours || 16) * 60;
+    const el = (n.min - s + 1440) % 1440;
+    if (el < 1 || el > max) return { err: t('វេនរបស់អ្នកចប់នៅម៉ោង ' + h12(emp.otStart) + '។ អាចស្នើថែមម៉ោងបានក្រោយម៉ោងនោះ។', 'Your shift ends at ' + h12(emp.otStart) + '. OT can be requested only after that time.'), start: emp.otStart };
+    const end = pad(Math.floor(n.min / 60)) + ':' + pad(n.min % 60);
+    return { date: n.min < s ? addDays(n.ymd, -1) : n.ymd, start: emp.otStart, end, hours: Math.round(el / 60 * 100) / 100, overnight: n.min < s };
+  }
+  const isAuto = () => (cfg || {}).timeMode === 'auto';
+  function tickAuto() {
+    if (!isAuto() || state.tab !== 'new' || state.result || !$('#roEnd')) return;
+    const a = autoCalc(state.emp), n = autoNow();
+    const date = (a && a.date) || n.ymd;
+    $('#roDate').textContent = fmtDate(date);
+    $('#dayInfo').innerHTML = dayHtml(date);
+    $('#roStart').textContent = state.emp && state.emp.otStart ? h12(state.emp.otStart) : '—';
+    $('#roEnd').textContent = h12(pad(Math.floor(n.min / 60)) + ':' + pad(n.min % 60));
+    $('#total').innerHTML = totalHtml(a);
+  }
+  setInterval(tickAuto, 15000);
+
   const STATUS = {
     Pending: { cls: 'pending', km: 'កំពុងរង់ចាំ', en: 'Pending', ico: '⏳' },
     Approved: { cls: 'approved', km: 'បានអនុម័ត', en: 'Approved', ico: '✅' },
@@ -82,7 +112,7 @@
   // ---------- state ----------
   let cfg = getJ(K.cfg, null);
   const state0 = getJ(K.draft, {}); delete state0.date;   // the form always opens on today's date
-  const state = { dept: null, deptErr: '', deptChecking: false, tab: 'new', emp: null, lookingUp: false, lookupErr: '', draft: state0, sending: false, sendErr: '', result: null };
+  const state = { skew: 0, dept: null, deptErr: '', deptChecking: false, tab: 'new', emp: null, lookingUp: false, lookupErr: '', draft: state0, sending: false, sendErr: '', result: null };
   let redraw = () => {};
 
   async function loadConfig() {
@@ -93,6 +123,7 @@
         state.people = c.list; delete c.list;
         set(K.people, JSON.stringify({ at: Date.now(), list: state.people }));
       }
+      if (c.serverNow) state.skew = c.serverNow - Date.now();
       cfg = c; set(K.cfg, JSON.stringify(c));
       if (state.tab === 'new' && !state.result && !scanner.on) renderNew(true);
     } catch (e) {
@@ -118,6 +149,7 @@
     if (!d.key) { d.key = uuid(); saveDraft(); }
     const idVal = keep && $('#empId') ? $('#empId').value : (state.emp ? state.emp.id : (get(K.id) || ''));
     const calcd = calc(d.start, d.end, c.overnight !== false);
+    const auto = c.timeMode === 'auto', ac = auto ? autoCalc(state.emp) : null;
     const reasons = (c.reasons || []).map(r => r.replace(/[.…]+$/, '').trim()).filter(Boolean);
 
     $('#view').innerHTML = `
@@ -139,6 +171,7 @@
             <div class="kv"><span>${t('ឈ្មោះ (អង់គ្លេស)', 'Name (English)')}</span><b>${esc(state.emp.en)}</b></div>
             <div class="kv"><span>${t('ឈ្មោះ (ខ្មែរ)', 'Name (Khmer)')}</span><b>${esc(state.emp.kh || '—')}</b></div>
             <div class="kv"><span>${t('អ្នកគ្រប់គ្រងផ្ទាល់', 'Line manager')}</span><b>${esc(state.emp.manager || '—')}</b></div>
+            ${state.emp.shift || state.emp.shiftTime ? `<div class="kv"><span>${t('វេន', 'Shift')}</span><b>${esc([state.emp.shift, state.emp.shiftTime].filter(Boolean).join(' · '))}</b></div>` : ''}
             <div class="lock">🔒 ${t('ព័ត៌មាននេះមកពីបញ្ជីបុគ្គលិក មិនអាចកែបានទេ។', 'From the employee list. It cannot be changed here.')}</div>
           </div>
           ${state.emp.ready ? '' : `<div class="alert warn">${t('អ្នកគ្រប់គ្រងរបស់អ្នកមិនទាន់ភ្ជាប់ Telegram ទេ។ សំណើនឹងត្រូវរក្សាទុក ហើយផ្ញើទៅពេលក្រោយ។', "Your line manager is not connected to Telegram yet. Your request will be saved and sent once they are.")}</div>`}` : ''}
@@ -146,7 +179,23 @@
 
         <section class="card">
           <h2><span class="n">2</span>${t('ព័ត៌មានថែមម៉ោង', 'OT details')}</h2>
-          <div class="field">
+          ${auto ? `<div class="field">
+            <label class="f">${t('ថ្ងៃធ្វើថែមម៉ោង', 'OT date')} 🔒</label>
+            <div class="in ro" id="roDate">${esc(fmtDate(ac && ac.date || autoNow().ymd))}</div>
+            <div class="dayinfo" id="dayInfo" aria-live="polite">${dayHtml(ac && ac.date || autoNow().ymd)}</div>
+          </div>
+          <div class="field row2">
+            <div>
+              <label class="f">${t('ចាប់ពីម៉ោង', 'Start time')} 🔒</label>
+              <div class="in ro" id="roStart">${state.emp && state.emp.otStart ? esc(h12(state.emp.otStart)) : '—'}</div>
+            </div>
+            <div>
+              <label class="f">${t('ដល់ម៉ោង (ឥឡូវ)', 'End time (now)')} 🔒</label>
+              <div class="in ro" id="roEnd">${esc(h12(pad(Math.floor(autoNow().min / 60)) + ':' + pad(autoNow().min % 60)))}</div>
+            </div>
+          </div>
+          <div class="hint autohint">⏱ ${t('ម៉ោងចាប់ផ្តើម = ម៉ោងចប់វេនរបស់អ្នក។ ម៉ោងបញ្ចប់ = ម៉ោងដែលអ្នកចុចផ្ញើ។ មិនអាចកែបានទេ។', 'Start = the end of your shift. End = the time you press Submit. They cannot be changed.')}</div>
+          ` : `<div class="field">
             <label class="f" for="otDate">${t('ថ្ងៃធ្វើថែមម៉ោង', 'OT date')} <span class="req">*</span></label>
             <input class="in" type="date" id="otDate" value="${esc(d.date)}" ${c.today && c.maxPast != null ? `min="${addDays(c.today, -c.maxPast)}"` : ''} ${c.today && c.maxFuture != null ? `max="${addDays(c.today, c.maxFuture)}"` : ''} required>
             <div class="dayinfo" id="dayInfo" aria-live="polite">${dayHtml(d.date)}</div>
@@ -161,8 +210,8 @@
               <input class="in" type="time" id="otEnd" value="${esc(d.end || '')}" required>
             </div>
           </div>
-          <div class="field">
-            <div class="total" id="total">${totalHtml(calcd)}</div>
+`}          <div class="field">
+            <div class="total" id="total">${totalHtml(auto ? ac : calcd)}</div>
           </div>
           <div class="field">
             <label class="f" for="otReason">${t('មូលហេតុ / ការងារដែលធ្វើ', 'Reason / work done')} <span class="req">*</span></label>
@@ -211,7 +260,7 @@
       $('#dayInfo').innerHTML = dayHtml(d.date);
       $('#total').innerHTML = totalHtml(calc(d.start, d.end, (cfg || {}).overnight !== false));
     };
-    ['#otDate', '#otStart', '#otEnd'].forEach(s => { $(s).addEventListener('input', onTime); $(s).addEventListener('change', onTime); });
+    ['#otDate', '#otStart', '#otEnd'].forEach(s => { const el = $(s); if (!el) return; el.addEventListener('input', onTime); el.addEventListener('change', onTime); });
     $('#otReason').addEventListener('input', e => { d.reason = e.target.value; saveDraft(); });
     const rp = $('#otReasonPick');
     if (rp) rp.addEventListener('change', () => {
@@ -362,7 +411,7 @@
     const el = $('#empId'); if (el) el.value = id;
     const p = people().find(x => x.id === id);
     if (p && 'manager' in p) {   // instant: no wait for the server (it re-checks on submit)
-      state.emp = { id: p.id, en: p.en, kh: p.kh, manager: p.manager, ready: p.ready !== false };
+      state.emp = { id: p.id, en: p.en, kh: p.kh, manager: p.manager, ready: p.ready !== false, shift: p.shift || '', shiftTime: p.shiftTime || '', otStart: p.otStart || '' };
       state.lookupErr = ''; set(K.id, p.id); renderNew(true); return;
     }
     lookup(id);
@@ -436,12 +485,16 @@
     const idNow = $('#empId').value.trim();
     const problems = [];
     if (!state.emp || state.emp.id !== idNow) problems.push(t('សូមស្វែងរកលេខកាតបុគ្គលិករបស់អ្នកជាមុន។', 'Please find your Employee ID first.'));
+    const auto = c.timeMode === 'auto', ac = auto ? autoCalc(state.emp) : null;
+    if (auto && ac && ac.err) problems.push(ac.err);
+    if (!auto) {
     if (!d.date) problems.push(t('សូមជ្រើសរើសថ្ងៃ។', 'Please choose the OT date.'));
     const today = c.today || localYmd();
     if (d.date && c.maxPast != null && d.date < addDays(today, -c.maxPast)) problems.push(t('អាចស្នើថ្ងៃថយក្រោយបានត្រឹមតែ ' + c.maxPast + ' ថ្ងៃប៉ុណ្ណោះ។', 'The OT date can be at most ' + c.maxPast + ' days back.'));
     if (d.date && c.maxFuture != null && d.date > addDays(today, c.maxFuture)) problems.push(t('ថ្ងៃនេះឆ្ងាយពេកទៅមុខ។', 'The OT date is too far ahead.'));
     if (!d.start || !d.end) problems.push(t('សូមបញ្ចូលម៉ោងចាប់ផ្តើម និងម៉ោងបញ្ចប់។', 'Please enter the start and end time.'));
-    const cc = calc(d.start, d.end, c.overnight !== false);
+    }
+    const cc = auto ? (ac && !ac.err ? ac : null) : calc(d.start, d.end, c.overnight !== false);
     if (cc && cc.err) problems.push(cc.err);
     if (cc && !cc.err && c.maxHours != null && cc.hours > c.maxHours) problems.push(t('ម៉ោងថែមលើសកំណត់', 'OT is more than the limit of') + ' ' + c.maxHours + ' ' + t('ម៉ោង។', 'hours.'));
     if (String(d.reason || '').trim().length < 3) problems.push(t('សូមបញ្ចូលមូលហេតុ។', 'Please enter the OT reason.'));
@@ -449,7 +502,8 @@
 
     state.sending = true; state.sendErr = ''; renderNew(true);
     try {
-      const payload = { key: d.key, id: state.emp.id, date: d.date, start: d.start, end: d.end, reason: String(d.reason).trim(), dept: state.dept ? state.dept.code : '' };
+      const tm = auto ? ac : d;   // in Auto the server sets the date and times itself
+      const payload = { key: d.key, id: state.emp.id, date: tm.date, start: tm.start, end: tm.end, reason: String(d.reason).trim(), dept: state.dept ? state.dept.code : '' };
       if (c.needGps) Object.assign(payload, await getGps());
       const r = await api('submit', payload);
       remember(state.emp.id, r.reqId);
@@ -458,7 +512,7 @@
         const nr = String(d.reason).trim(), k = x => x.replace(/[.…\s]+$/, '').trim().toLowerCase();
         if (!cfg.reasons.some(x => k(x) === k(nr))) { cfg.reasons = cfg.reasons.concat(nr).sort((x, y) => x.localeCompare(y)); set(K.cfg, JSON.stringify(cfg)); }
       }
-      state.result = Object.assign({ hours: cc.hours, date: d.date, start: d.start, end: d.end, emp: state.emp }, r);
+      state.result = Object.assign({ hours: cc.hours, date: tm.date, start: tm.start, end: tm.end, emp: state.emp }, r);
       state.draft = {};                   // a fresh key, and today's date, for the next request
       saveDraft();
       setDept(null);                      // the next request needs a new scan
@@ -596,13 +650,13 @@
   function demo(action, p) {
     const wait = ms => new Promise(r => setTimeout(r, ms));
     const EMP = {
-      100027: { id: '100027', en: 'TOUCH E', kh: 'ទូច អេ', manager: 'Kim Sopheakdey', ready: true },
-      100037: { id: '100037', en: 'KANG VANNA', kh: 'កាំង វណ្ណា', manager: 'Kim Sopheakdey', ready: true },
+      100027: { id: '100027', en: 'TOUCH E', kh: 'ទូច អេ', manager: 'Kim Sopheakdey', ready: true, shift: 'Shift 1', shiftTime: '7:00 AM to 4:00 PM', otStart: '16:00' },
+      100037: { id: '100037', en: 'KANG VANNA', kh: 'កាំង វណ្ណា', manager: 'Kim Sopheakdey', ready: true, shift: 'Shift 3', shiftTime: '12:00 PM to 4:00 AM', otStart: '04:00' },
       100022: { id: '100022', en: 'SENG VICHEA', kh: '', manager: 'Kim Sopheakdey', ready: false },
     };
     const db = getJ('ot_demo_db', {});
     return wait(350).then(() => {
-      if (action === 'config') return { needDept: true, reasons: ['ធ្វើការថ្ងៃបុណ្យ...', 'រៀបចំទំនិញសម្រាប់ដឹកជញ្ជូន...'], overnight: true, needGps: false, maxHours: null, maxPast: 7, today: localYmd(),
+      if (action === 'config') return { timeMode: 'auto', serverNow: Date.now(), maxAutoHours: 16, needDept: true, reasons: ['ធ្វើការថ្ងៃបុណ្យ...', 'រៀបចំទំនិញសម្រាប់ដឹកជញ្ជូន...'], overnight: true, needGps: false, maxHours: null, maxPast: 7, today: localYmd(),
         holidays: [{ date: '2026-10-10', en: 'Phcum Ben Festival', kh: 'ពិធីបុណ្យភ្ជុំបិណ្ឌ' }, { date: '2026-10-15', en: "Commemoration Day of King's Father", kh: 'ទិវាប្រារព្ធពិធីគោរពព្រះវិញ្ញាណក្ខន្ធ ព្រះករុណា ព្រះបាទសម្តេចព្រះ នរោត្តម សីហនុ' }], list: p.withEmployees ? Object.values(EMP) : undefined };
       if (action === 'dept') { const c = String(p.code || '').replace(/^.*[?&]d=/, '').toUpperCase(); if (c !== 'D-DEMO01') throw Object.assign(new Error('Wrong QR code.'), { code: 'BAD_QR' }); return { code: c, name: 'Warehouse (demo)' }; }
       if (action === 'employees') return { list: Object.values(EMP) };

@@ -180,3 +180,7 @@ input.in:focus, textarea.in:focus { border-color: var(--accent); box-shadow: 0 0
 .deptbar span { flex: 1; min-width: 0; }
 .deptbar b { color: inherit; }
 .link { border: 0; background: none; padding: 4px 0; font: inherit; font-size: 13.5px; font-weight: 700; color: var(--accent); text-decoration: underline; cursor: pointer; white-space: nowrap; }
+
+/* Auto date & time: read-only boxes. */
+.in.ro { display: flex; align-items: center; width: 100%; min-height: 52px; padding: 10px 14px; border-radius: 12px; border: 1.5px solid transparent; background: var(--soft); font-size: 17px; font-weight: 700; color: var(--text); cursor: default; user-select: none; }
+.autohint { margin: -4px 0 12px; }
