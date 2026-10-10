@@ -84,7 +84,12 @@
 
   async function loadConfig() {
     try {
-      const c = await api('config');
+      // One call brings the settings, holidays and the employee list (for the search box).
+      const c = await api('config', { withEmployees: true });
+      if (c.list) {
+        state.people = c.list; delete c.list;
+        set(K.people, JSON.stringify({ at: Date.now(), list: state.people }));
+      }
       cfg = c; set(K.cfg, JSON.stringify(c));
       if (state.tab === 'new' && !state.result) renderNew(true);
     } catch (e) { if (!cfg) cfg = { reasons: [], overnight: true, needGps: false }; }
@@ -92,7 +97,7 @@
 
   function saveDraft() {
     const d = state.draft;
-    set(K.draft, JSON.stringify({ date: d.date, start: d.start, end: d.end, reason: d.reason, key: d.key }));
+    set(K.draft, JSON.stringify({ date: d.date, start: d.start, end: d.end, reason: d.reason, pick: d.pick, key: d.key }));
   }
 
   // ---------- New request ----------
@@ -118,7 +123,7 @@
               <input class="in${state.lookupErr ? ' err' : ''}" id="empId" autocomplete="off" autocorrect="off" spellcheck="false" maxlength="60" placeholder="${esc(t('ឧ. 100027 ឬ ទូច អេ ឬ TOUCH E', 'e.g. 100027, TOUCH E or ទូច អេ'))}" value="${esc(idVal)}" role="combobox" aria-autocomplete="list" aria-controls="sugg" aria-expanded="false">
               <div class="sugg" id="sugg" role="listbox" hidden></div>
             </div>
-            <button type="button" class="btn" id="findBtn" ${state.lookingUp ? 'disabled' : ''}>${state.lookingUp ? '<span class="sp"></span>' : '🔎'} ${t('ស្វែងរក', 'Find')}</button>
+            <button type="button" class="btn" id="findBtn" ${state.lookingUp ? 'disabled' : ''}>${state.lookingUp ? '<span class="sp"></span>' : '🔎'} ${t('ស្វែងរក', 'Search')}</button>
           </div>
           ${state.lookupErr ? `<div class="msg-err" role="alert">${esc(state.lookupErr)}</div>` : ''}
           ${state.emp ? `
@@ -135,10 +140,8 @@
           <h2><span class="n">2</span>${t('ព័ត៌មានថែមម៉ោង', 'OT details')}</h2>
           <div class="field">
             <label class="f" for="otDate">${t('ថ្ងៃធ្វើថែមម៉ោង', 'OT date')} <span class="req">*</span></label>
-            <div class="row2">
-              <input class="in" type="date" id="otDate" value="${esc(d.date)}" required>
-              <div class="dayinfo" id="dayInfo" aria-live="polite">${dayHtml(d.date)}</div>
-            </div>
+            <input class="in" type="date" id="otDate" value="${esc(d.date)}" required>
+            <div class="dayinfo" id="dayInfo" aria-live="polite">${dayHtml(d.date)}</div>
           </div>
           <div class="field row2">
             <div>
@@ -155,8 +158,12 @@
           </div>
           <div class="field">
             <label class="f" for="otReason">${t('មូលហេតុ / ការងារដែលធ្វើ', 'Reason / work done')} <span class="req">*</span></label>
-            ${reasons.length ? `<div class="chips">${reasons.map(r => `<button type="button" class="chip${d.reason === r ? ' on' : ''}" data-r="${esc(r)}">${esc(r)}</button>`).join('')}</div>` : ''}
-            <textarea class="in" id="otReason" maxlength="500" placeholder="${esc(t('ឧ. រៀបចំទំនិញសម្រាប់ដឹកជញ្ជូន', 'e.g. Preparing goods for delivery'))}">${esc(d.reason || '')}</textarea>
+            ${reasons.length ? `<select class="in" id="otReasonPick">
+              <option value="" ${!d.pick ? 'selected' : ''} disabled>${t('— ជ្រើសរើសមូលហេតុ —', '— Choose a reason —')}</option>
+              ${reasons.map(r => `<option value="${esc(r)}" ${d.pick === r ? 'selected' : ''}>${esc(r)}</option>`).join('')}
+              <option value="__other" ${d.pick === '__other' ? 'selected' : ''}>${t('ផ្សេងៗ (សរសេរខាងក្រោម)', 'Other (type below)')}</option>
+            </select>` : ''}
+            <textarea class="in" id="otReason" maxlength="500" ${reasons.length && d.pick !== '__other' ? 'hidden' : ''} placeholder="${esc(t('សរសេរមូលហេតុ ឬការងារដែលធ្វើ', 'Type the reason or work done'))}">${esc(d.pick && d.pick !== '__other' ? '' : (d.reason || ''))}</textarea>
           </div>
           ${c.needGps ? `<div class="hint">📍 ${t('ត្រូវការទីតាំងរបស់អ្នក ហើយអ្នកត្រូវនៅក្នុងចម្ងាយ', 'Your location is needed. You must be within')} ${esc(c.radius)} m ${t('ពីកន្លែងធ្វើការរបស់អ្នក។', 'of your workplace.')}</div>` : ''}
         </section>
@@ -168,17 +175,12 @@
       </form>`;
 
     const idEl = $('#empId');
-    let idTimer = 0;
+    // Nothing is searched while typing: results appear only after the Search button (or Enter).
     idEl.addEventListener('input', () => {
       const v = idEl.value.trim();
-      if (state.emp && state.emp.id !== v) { state.emp = null; state.lookupErr = ''; renderNew(true); $('#empId').focus(); placeCaret(); showSugg(v); return; }
-      clearTimeout(idTimer);
-      const hits = showSugg(v);
-      // A complete ID typed in full is looked up straight away.
-      if (/^\d{4,}$/.test(v) && hits.some(p => p.id === v)) idTimer = setTimeout(() => lookup(v), 250);
-      else if (/^\d{6,}$/.test(v) && !people().length) idTimer = setTimeout(() => lookup(v), 450);
+      hideSugg();
+      if (state.emp && state.emp.id !== v) { state.emp = null; state.lookupErr = ''; renderNew(true); $('#empId').focus(); placeCaret(); }
     });
-    idEl.addEventListener('focus', () => { if (!state.emp) showSugg(idEl.value.trim()); });
     idEl.addEventListener('keydown', e => {
       const items = Array.from(document.querySelectorAll('#sugg .opt'));
       const on = items.findIndex(x => x.classList.contains('on'));
@@ -190,14 +192,10 @@
       } else if (e.key === 'Enter') { e.preventDefault(); find(on >= 0 ? items[on].dataset.id : null); }
       else if (e.key === 'Escape') hideSugg();
     });
-    idEl.addEventListener('blur', () => setTimeout(() => {
-      hideSugg();
-      const v = idEl.value.trim();
-      if (/^\d+$/.test(v) && (!state.emp || state.emp.id !== v) && !state.lookingUp) lookup(v);
-    }, 180));
     $('#sugg').addEventListener('mousedown', e => e.preventDefault());   // keep focus so the tap lands
     $('#sugg').addEventListener('click', e => { const o = e.target.closest('.opt'); if (o) pick(o.dataset.id); });
     $('#findBtn').onclick = () => find(null);
+    $('#form').addEventListener('click', e => { if (!e.target.closest('.idrow')) hideSugg(); });
 
     const onTime = () => {
       d.date = $('#otDate').value; d.start = $('#otStart').value; d.end = $('#otEnd').value; saveDraft();
@@ -205,13 +203,15 @@
       $('#total').innerHTML = totalHtml(calc(d.start, d.end, (cfg || {}).overnight !== false));
     };
     ['#otDate', '#otStart', '#otEnd'].forEach(s => { $(s).addEventListener('input', onTime); $(s).addEventListener('change', onTime); });
-    $('#otReason').addEventListener('input', e => {
-      d.reason = e.target.value; saveDraft();
-      document.querySelectorAll('.chip').forEach(ch => ch.classList.toggle('on', ch.dataset.r === d.reason));
-    });
-    document.querySelectorAll('.chip').forEach(ch => ch.onclick = () => {
-      d.reason = ch.dataset.r; $('#otReason').value = d.reason; saveDraft();
-      document.querySelectorAll('.chip').forEach(x => x.classList.toggle('on', x === ch));
+    $('#otReason').addEventListener('input', e => { d.reason = e.target.value; saveDraft(); });
+    const rp = $('#otReasonPick');
+    if (rp) rp.addEventListener('change', () => {
+      d.pick = rp.value;
+      const other = d.pick === '__other';
+      $('#otReason').hidden = !other;
+      d.reason = other ? $('#otReason').value : d.pick;
+      saveDraft();
+      if (other) $('#otReason').focus();
     });
     $('#form').onsubmit = e => { e.preventDefault(); submit(); };
   }
@@ -247,7 +247,16 @@
     return hits;
   }
   function hideSugg() { const box = $('#sugg'); if (box) { box.hidden = true; box.innerHTML = ''; } const el = $('#empId'); if (el) el.setAttribute('aria-expanded', 'false'); }
-  function pick(id) { hideSugg(); const el = $('#empId'); if (el) el.value = id; lookup(id); }
+  function pick(id) {
+    hideSugg();
+    const el = $('#empId'); if (el) el.value = id;
+    const p = people().find(x => x.id === id);
+    if (p && 'manager' in p) {   // instant: no wait for the server (it re-checks on submit)
+      state.emp = { id: p.id, en: p.en, kh: p.kh, manager: p.manager, ready: p.ready !== false };
+      state.lookupErr = ''; set(K.id, p.id); renderNew(true); return;
+    }
+    lookup(id);
+  }
   function find(chosen) {
     const v = $('#empId').value.trim();
     if (chosen) return pick(chosen);
@@ -255,21 +264,14 @@
     const hits = search(v);
     const exact = hits.find(p => p.id === v);
     if (exact || hits.length === 1) return pick((exact || hits[0]).id);
-    if (/^[A-Za-z0-9-]{1,20}$/.test(v) && /\d/.test(v)) return lookup(v);   // an ID not in the saved list yet
     if (hits.length) { showSugg(v); return; }
+    if (/^[A-Za-z0-9-]{1,20}$/.test(v) && /\d/.test(v)) return lookup(v);   // an ID not in the saved list yet
     state.emp = null; state.lookupErr = t('រកមិនឃើញបុគ្គលិកដែលមានលេខកាត ឬឈ្មោះនេះទេ។', 'No employee found with that ID or name.'); renderNew(true);
   }
-  async function loadPeople() {
+  // The list saved on the phone is used at once; loadConfig() refreshes it in the background.
+  function loadPeople() {
     const saved = getJ(K.people, null);
     if (saved && saved.list) state.people = saved.list;
-    if (saved && Date.now() - saved.at < 10 * 60000) return;
-    try {
-      const r = await api('employees');
-      state.people = r.list || [];
-      set(K.people, JSON.stringify({ at: Date.now(), list: state.people }));
-      const el = $('#empId');
-      if (el && document.activeElement === el && !state.emp) showSugg(el.value.trim());
-    } catch (e) { /* the ID box still works by exact ID */ }
   }
 
   // ---------- OT date: public holiday from the Setting sheet ----------
@@ -480,8 +482,8 @@
     const db = getJ('ot_demo_db', {});
     return wait(350).then(() => {
       if (action === 'config') return { reasons: ['ធ្វើការថ្ងៃបុណ្យ...', 'រៀបចំទំនិញសម្រាប់ដឹកជញ្ជូន...'], overnight: true, needGps: false, maxHours: null, today: localYmd(),
-        holidays: [{ date: '2026-10-10', en: 'Phcum Ben Festival', kh: 'ពិធីបុណ្យភ្ជុំបិណ្ឌ' }, { date: '2026-10-15', en: "Commemoration Day of King's Father", kh: 'ទិវាប្រារព្ធពិធីគោរពព្រះវិញ្ញាណក្ខន្ធ ព្រះករុណា ព្រះបាទសម្តេចព្រះ នរោត្តម សីហនុ' }] };
-      if (action === 'employees') return { list: Object.keys(EMP).map(k => ({ id: EMP[k].id, en: EMP[k].en, kh: EMP[k].kh })) };
+        holidays: [{ date: '2026-10-10', en: 'Phcum Ben Festival', kh: 'ពិធីបុណ្យភ្ជុំបិណ្ឌ' }, { date: '2026-10-15', en: "Commemoration Day of King's Father", kh: 'ទិវាប្រារព្ធពិធីគោរពព្រះវិញ្ញាណក្ខន្ធ ព្រះករុណា ព្រះបាទសម្តេចព្រះ នរោត្តម សីហនុ' }], list: p.withEmployees ? Object.values(EMP) : undefined };
+      if (action === 'employees') return { list: Object.values(EMP) };
       if (action === 'lookup') { const e = EMP[p.id]; if (!e) throw Object.assign(new Error('Employee ID not found.'), { code: 'NOTFOUND' }); return e; }
       if (action === 'submit') {
         if (db['k_' + p.key]) return { reqId: db['k_' + p.key], status: 'Pending', repeated: true };
@@ -502,5 +504,5 @@
   renderNew();
   loadConfig();
   loadPeople();
-  if (get(K.id) && !state.emp) lookup(get(K.id));
+  if (get(K.id) && !state.emp) pick(get(K.id));
 })();

@@ -160,7 +160,7 @@ input.in:focus, textarea.in:focus { border-color: var(--accent); box-shadow: 0 0
 .sugg .opt.on, .sugg .opt:hover { background: var(--soft); }
 
 /* OT date: holiday / Sunday / regular day next to the date. */
-.dayinfo { display: flex; align-items: center; min-height: 48px; padding: 6px 12px; border-radius: 12px; border: 1.5px dashed var(--line); font-size: 14px; line-height: 1.35; }
+.dayinfo { margin-top: 8px; display: flex; align-items: center; min-height: 48px; padding: 6px 12px; border-radius: 12px; border: 1.5px dashed var(--line); font-size: 14px; line-height: 1.35; }
 .dayinfo .hol { color: var(--bad); font-weight: 700; }
 .dayinfo .sun { color: var(--warn); font-weight: 700; }
 .dayinfo .norm { color: var(--muted); }
