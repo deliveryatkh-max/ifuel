@@ -96,6 +96,8 @@ const HOME_APPS = [
   { key: 'location', col: 'ទីតាំងថ្មី' },
   { key: 'dashboard', col: 'Dashboard' },
 ];
+// Ticked for every user by default (Kim, 10 Oct 2026). Dashboard stays for reviewers and admins.
+const DEFAULT_APPS = ['fuel', 'transport', 'overtime', 'location'];
 const ACTION_APP = {
   config: 'fuel', submit: 'fuel', update: 'fuel', mine: 'fuel', all: 'fuel', review: 'fuel',
   dashboard: 'dashboard', dashboardSave: 'dashboard',
@@ -122,27 +124,37 @@ function homeApps_(p, user) {
 
 /**
  * Adds the app tick box columns to the Users sheet the first time the home menu is opened.
- * Starting values keep today's access: ចាក់សាំង ticked for everyone, Dashboard for reviewers and admins.
+ * Starting values: the DEFAULT_APPS ticked for everyone, Dashboard for reviewers and admins.
+ * Also ticks the DEFAULT_APPS once for the users already in the sheet (Script Property APPS_DEFAULT_DONE).
  */
 function ensureAppColumns_() {
   const sheet = SpreadsheetApp.getActive().getSheetByName(SHEETS.USERS);
   const header = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map(h => String(h).trim());
   const missing = HOME_APPS.filter(a => header.indexOf(a.col) < 0);
-  if (!missing.length) return;
+  const props = PropertiesService.getScriptProperties();
+  if (!missing.length && props.getProperty('APPS_DEFAULT_DONE')) return;
   const lock = LockService.getScriptLock();
   lock.waitLock(20000);
   try {
     const now = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map(h => String(h).trim());
     const roleCol = now.indexOf('Role');
     const rows = Math.max(sheet.getLastRow() - 1, 0);
-    const roles = rows && roleCol >= 0 ? sheet.getRange(2, roleCol + 1, rows, 1).getValues().map(r => String(r[0]).trim().toLowerCase()) : [];
+    const roles = !rows ? [] : roleCol >= 0 ? sheet.getRange(2, roleCol + 1, rows, 1).getValues().map(r => String(r[0]).trim().toLowerCase()) : new Array(rows).fill('');
     missing.filter(a => now.indexOf(a.col) < 0).forEach(a => {
       const c = sheet.getLastColumn() + 1;
       sheet.getRange(1, c).setValue(a.col).setFontWeight('bold');
       // Only the rows that exist: blank tick boxes below would count as data and push new rows down the sheet.
       if (rows) sheet.getRange(2, c, rows, 1).insertCheckboxes().setValues(roles.map(r =>
-        [a.key === 'fuel' || (a.key === 'dashboard' && (r === 'reviewer' || r === 'admin'))]));
+        [DEFAULT_APPS.indexOf(a.key) >= 0 || (a.key === 'dashboard' && (r === 'reviewer' || r === 'admin'))]));
     });
+    if (!props.getProperty('APPS_DEFAULT_DONE')) {
+      const cols = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map(h => String(h).trim());
+      if (rows) HOME_APPS.filter(a => DEFAULT_APPS.indexOf(a.key) >= 0).forEach(a => {
+        const c = cols.indexOf(a.col) + 1;
+        if (c > 0) sheet.getRange(2, c, rows, 1).insertCheckboxes().setValues(roles.map(() => [true]));
+      });
+      props.setProperty('APPS_DEFAULT_DONE', new Date().toISOString());
+    }
   } finally {
     lock.releaseLock();
   }
@@ -269,9 +281,9 @@ function requestAccess_(token) {
     if (!existing) {
       const row = header.map(h => ({ Email: email, Name: name, Role: 'user', Active: 'No' })[h] || '');
       sheet.appendRow(row);
-      // Unticked app boxes on the new row, so the admin only has to tick them.
+      // App tick boxes on the new row: the default apps ticked, so the admin only switches Active to Yes.
       const r = sheet.getLastRow();
-      HOME_APPS.forEach(a => { const c = col(a.col); if (c >= 0) sheet.getRange(r, c + 1).insertCheckboxes(); });
+      HOME_APPS.forEach(a => { const c = col(a.col); if (c >= 0) sheet.getRange(r, c + 1).insertCheckboxes().setValue(DEFAULT_APPS.indexOf(a.key) >= 0); });
       added = true;
     }
   } finally {
@@ -288,7 +300,7 @@ function requestAccess_(token) {
         '👤 ' + esc(name || '-'),
         '📧 ' + esc(email),
         '',
-        'Users sheet: Active = Yes ហើយធីកកម្មវិធី ដើម្បីអនុញ្ញាត / set Active = Yes and tick the apps to allow.',
+        'Users sheet: Active = Yes ដើម្បីអនុញ្ញាត (កម្មវិធីធម្មតាបានធីករួច) / set Active = Yes to allow (the usual apps are already ticked).',
       ].join('\n') });
     } catch (e) { /* the request is saved in the sheet even if Telegram fails */ }
   }
